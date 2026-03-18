@@ -177,7 +177,8 @@ Torn_Dark_tools/
 ├── README.md                              ← this file
 ├── urls                                   ← raw GitHub URLs for Torn PDA remote loading
 ├── docs/
-│   └── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
+│   ├── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
+│   └── community-repos.md                 ← Community Torn script repos analysis & learnings
 ├── torn-assistant.user.js                 ← AI Advisor bubble script
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble script

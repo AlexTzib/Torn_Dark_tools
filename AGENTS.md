@@ -31,7 +31,8 @@ Torn_Dark_tools/
 ├── README.md                              ← User-facing project documentation
 ├── urls                                   ← Raw GitHub URLs for Torn PDA remote loading
 ├── docs/
-│   └── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
+│   ├── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
+│   └── community-repos.md                 ← Community Torn script repos analysis & learnings
 ├── torn-assistant.user.js                 ← AI Advisor bubble (~1517 lines)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble (~968 lines)
@@ -675,7 +676,7 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 
 ## Community Research Reference
 
-Key patterns learned from analyzing popular Torn community scripts (TornTools extension, Xoke scripts, tc-greasemonkey, etc.). Full details in `docs/torn-api-patterns.md`.
+Key patterns learned from analyzing popular Torn community scripts (TornTools extension, Xoke scripts, tc-greasemonkey, etc.). Full details in `docs/torn-api-patterns.md` and `docs/community-repos.md`.
 
 ### Patterns Worth Adopting
 
