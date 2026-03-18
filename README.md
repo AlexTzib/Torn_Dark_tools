@@ -155,6 +155,12 @@ During the review process, the following improvements were made:
 
 ---
 
+## Contributing Rules
+
+- **When adding or renaming a `.user.js` script, always update the `urls` file** with the corresponding raw GitHub URL (`https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/<filename>`). This file is used by Torn PDA for remote script loading.
+
+---
+
 ## License
 
 These scripts are provided as-is for personal use with the Torn City game. Use at your own risk. The authors are not responsible for any consequences of using these scripts, including but not limited to account actions by Torn staff.
