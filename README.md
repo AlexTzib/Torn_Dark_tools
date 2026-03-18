@@ -175,7 +175,9 @@ During the review process, the following improvements were made:
 
 10. **Debug log panels (all scripts):** Collapsible log section at the bottom of each panel with timestamped event entries and a "Copy Log" button for sharing during bug reports.
 
-11. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
+11. **API response normalization (AI Advisor):** Torn API v1 returns bars (`energy`, `nerve`, etc.), battle stats, and money at the top level — not nested under wrapper objects. `mergeUserData()` now normalizes the flat response into the `user.bars`, `user.battlestats`, and `user.money` structures the rendering code expects. This fixed energy/stats showing 0/0.
+
+12. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
 
 ---
 

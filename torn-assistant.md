@@ -51,9 +51,10 @@ It displays a draggable chat-head bubble that expands into a panel showing playe
 
 1. On startup, the script resolves the API key using a three-tier priority: PDA injection > saved manual key > network interception.
 2. If a key is available, `fetchDirectData()` makes direct calls to `api.torn.com/user` and `api.torn.com/faction` for immediate data.
-3. The script also monkey-patches `window.fetch` and `XMLHttpRequest` to passively intercept additional API responses (e.g., torn/market data).
-4. All data is merged into an in-memory `STATE` object.
-5. When the user opens the panel, `renderPanel()` builds an HTML summary from that state.
+3. `mergeUserData()` **normalizes the flat API response** — the Torn API v1 returns `energy`, `nerve`, `happy` at the top level (not nested under a `bars` key), so the function creates wrapper objects (`user.bars`, `user.battlestats`, `user.money`) that the rendering code expects.
+4. The script also monkey-patches `window.fetch` and `XMLHttpRequest` to passively intercept additional API responses (e.g., torn/market data).
+5. All data is merged into an in-memory `STATE` object.
+6. When the user opens the panel, `renderPanel()` builds an HTML summary from that state.
 
 ## API Key Handling
 
@@ -69,12 +70,15 @@ It displays a draggable chat-head bubble that expands into a panel showing playe
 
 ## Data Sources
 
-| Source | Method | Notes |
-|---|---|---|
-| User bars, cooldowns, battle stats, money | Direct API call (`user` endpoint) + passive interception | Direct call on init; interception catches additional data |
-| Faction data | Direct API call (`faction` endpoint) + passive interception | Used for war timing card |
-| Stock market data | Passive interception of `api.torn.com/torn` responses | Requires the user to visit the stock page once |
-| Stock benefit rules | Hard-coded `STOCK_RULES` table | Static reference data (share thresholds, benefit types, payout frequencies) |
+| Source | Method | API Fields | Notes |
+|---|---|---|---|
+| Energy, nerve, happy, life | Direct API call (`user?selections=bars`) | Top-level `energy`, `nerve`, `happy`, `life` objects | Normalized into `user.bars` by `mergeUserData()` |
+| Cooldowns | Direct API call (`user?selections=cooldowns`) | `cooldowns` object (already nested) | No normalization needed |
+| Battle stats | Direct API call (`user?selections=battlestats`) | Top-level `strength`, `speed`, `dexterity`, `defense` | Normalized into `user.battlestats` |
+| Money | Direct API call (`user?selections=money`) | Top-level `money_onhand`, `vault_amount` | Normalized into `user.money` |
+| Faction data | Direct API call (`faction?selections=basic`) | `members`, `war`, `name`, `tag` | Used for war timing card |
+| Stock market data | Passive interception of `api.torn.com/torn` responses | `stocks` (already nested) | Requires visiting the stock page |
+| Stock benefit rules | Hard-coded `STOCK_RULES` table | N/A | Static reference data |
 
 ## Torn Policy Compliance
 

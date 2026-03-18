@@ -311,7 +311,7 @@ Every script has:
 
 **Key functions:**
 - `fetchDirectData()` — Direct API calls for user + faction data (requires API key)
-- `mergeUserData(data)` — Merges user API response into STATE.userData
+- `mergeUserData(data)` — Merges user API response into STATE.userData **and normalizes flat API fields** (see [API Response Normalization](#api-response-normalization))
 - `mergeTornData(data)` — Merges torn/market API response into STATE.tornData
 - `mergeFactionData(data)` — Merges faction API response into STATE.factionData
 - `renderHappyJumpCard(user)` — Happy jump readiness scoring
@@ -322,9 +322,10 @@ Every script has:
 
 **Data flow:**
 1. API key resolved (PDA > manual > intercepted)
-2. `fetchDirectData()` calls `api.torn.com/user` and `api.torn.com/faction`
-3. `hookFetch`/`hookXHR` passively intercepts additional traffic (torn/market)
-4. `renderPanel()` builds HTML from STATE
+2. `fetchDirectData()` calls `api.torn.com/user` and `api.torn.com/faction` (with detailed logging)
+3. `mergeUserData()` normalizes flat API response → creates `user.bars`, `user.battlestats`, `user.money` wrappers
+4. `hookFetch`/`hookXHR` passively intercepts additional traffic (torn/market)
+5. `renderPanel()` reads from the normalized wrapper objects
 
 **Hard-coded data:** `STOCK_RULES` object maps stock tickers to share thresholds, benefit types, frequencies, and benefit descriptions.
 
@@ -454,11 +455,13 @@ Never use inline `onclick="..."` in HTML strings.
 1. **Read the existing code first** — understand the STATE shape, renderPanel layout, and existing event handlers
 2. **Add any new STATE properties** to the STATE object at the top
 3. **Add processing logic** as a new function, don't modify existing functions unless necessary
-4. **Add UI** to `renderPanel()` — insert new cards/sections in the template literal
-5. **Add event handlers** after `body.innerHTML = ...` in renderPanel
-6. **Add `addLog()` calls** at key points (data received, errors, user actions)
-7. **Update the script's `.md` doc** — add to features table, data sources, compliance table
-8. **Update README.md** if the change affects the scripts table or compliance summary
+4. **If reading user API data**, remember the [API response is flat](#torn-api-v1-response-format-critical) — use the normalized wrapper objects (`user.bars`, `user.battlestats`, `user.money`) or read from top-level keys directly
+5. **Add UI** to `renderPanel()` — insert new cards/sections in the template literal
+6. **Add event handlers** after `body.innerHTML = ...` in renderPanel
+7. **Add `addLog()` calls** at key points (data received, errors, user actions)
+8. **Update the script's `.md` doc** — add to features table, data sources, compliance table
+9. **Update README.md** if the change affects the scripts table or compliance summary
+10. **Update this `AGENTS.md`** if you learned something new or changed architecture
 
 ---
 
@@ -478,6 +481,21 @@ Never use inline `onclick="..."` in HTML strings.
 - **DOM scraping is fragile.** Torn changes page structure periodically. Use multiple selector strategies with fallbacks.
 - **Torn's CSP blocks `eval()`.** PDA provides `PDA_evaluateJavascript()` as a workaround, but avoid needing it.
 - **Multiple scripts coexist.** Use unique DOM IDs, unique z-index bases, and unique localStorage key prefixes.
+
+### Torn API v1 Response Format (CRITICAL)
+
+**The Torn API v1 does NOT nest data the way you'd expect from the selection name.** This has caused bugs before (energy showing 0/0). Here's the actual mapping:
+
+| Selection | What the code might expect | What the API actually returns | Nested? |
+|---|---|---|---|
+| `bars` | `{ "bars": { "energy": {...} } }` | `{ "energy": {...}, "nerve": {...}, "happy": {...}, "life": {...} }` | **NO** — top level |
+| `cooldowns` | `{ "cooldowns": { "drug": 0 } }` | `{ "cooldowns": { "drug": 0, "booster": 0, "medical": 0 } }` | **YES** — nested |
+| `battlestats` | `{ "battlestats": { "strength": 100 } }` | `{ "strength": 100, "speed": 100, "dexterity": 100, "defense": 100 }` | **NO** — top level |
+| `money` | `{ "money": { "cash": 1000 } }` | `{ "money_onhand": 1000, "vault_amount": 500 }` | **NO** — top level |
+| `stocks` | `{ "stocks": {...} }` | `{ "stocks": { "1": {...} } }` | **YES** — nested |
+| `profile` | `{ "profile": {...} }` | `{ "name": "...", "player_id": 123, "level": 50, ... }` | **NO** — top level |
+
+**The `mergeUserData()` function in the AI Advisor normalizes this** by creating wrapper objects (`user.bars`, `user.battlestats`, `user.money`) from the flat top-level fields. If you add a new script that reads user data, either use the same normalization pattern or read from the correct top-level keys.
 
 ---
 
@@ -595,18 +613,35 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 
 ### Key API Response Fields (User)
 
+**IMPORTANT:** Bars and stats are at the TOP LEVEL, not nested. See [Torn API v1 Response Format](#torn-api-v1-response-format-critical).
+
 ```json
 {
-    "energy": { "current": 100, "maximum": 150, "ticktime": 120, "fulltime": 3000 },
-    "nerve": { "current": 25, "maximum": 50, "ticktime": 180, "fulltime": 4500 },
-    "happy": { "current": 5000, "maximum": 10000, "ticktime": 300, "fulltime": 150000 },
-    "life": { "current": 1000, "maximum": 1000 },
+    "energy": { "current": 100, "maximum": 150, "ticktime": 120, "fulltime": 3000, "interval": 600 },
+    "nerve": { "current": 25, "maximum": 50, "ticktime": 180, "fulltime": 4500, "interval": 300 },
+    "happy": { "current": 5000, "maximum": 10000, "ticktime": 300, "fulltime": 150000, "interval": 900 },
+    "life": { "current": 1000, "maximum": 1000, "ticktime": 0, "fulltime": 0, "interval": 0 },
     "cooldowns": { "drug": 0, "booster": 0, "medical": 0 },
+    "strength": 100000,
+    "speed": 100000,
+    "dexterity": 100000,
+    "defense": 100000,
     "money_onhand": 1000000,
-    "strength": 100000, "speed": 100000, "dexterity": 100000, "defense": 100000,
-    "stocks": { ... }
+    "vault_amount": 500000,
+    "points": 1234,
+    "stocks": { "1": { "stock_id": 1, "total_shares": 1000, "benefit": {...} } },
+    "name": "PlayerName",
+    "player_id": 12345,
+    "level": 50
 }
 ```
+
+**After `mergeUserData()` normalization**, the code can read these via wrapper objects:
+- `user.bars.energy.current` (mapped from `user.energy.current`)
+- `user.battlestats.strength` (mapped from `user.strength`)
+- `user.money.cash_on_hand` (mapped from `user.money_onhand`)
+- `user.cooldowns.drug` (already nested — no mapping needed)
+- `user.stocks` (already nested — no mapping needed)
 
 ---
 
