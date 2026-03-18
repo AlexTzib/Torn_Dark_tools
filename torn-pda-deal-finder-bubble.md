@@ -17,6 +17,7 @@ It displays a draggable bubble that expands into a panel showing potential flip 
 | **Cross-market comparison** | Compares bazaar prices against cached item-market floor prices (or market value) to find arbitrage opportunities |
 | **Price cache** | Remembers floor prices across page visits to enable cross-market deal evaluation |
 | **Deal classification** | Color-codes deals: green (> $500k profit), yellow (positive but small), red (negative) |
+| **Debug log** | Collapsible log panel with timestamped events and a "Copy Log" button for bug reporting |
 
 ## How It Works
 
@@ -98,6 +99,7 @@ Profit is calculated as: `net_sell_price - buy_price`, where `net_sell_price = g
 - **Bubble (green, "DF")** — tap to expand; drag to reposition
 - **Refresh** button — re-scans the current page DOM and recalculates deals
 - **○** button — collapses the panel back to the bubble
+- **Debug Log** section — tap the header to expand; "Copy Log" copies all entries to clipboard
 
 ## Limitations
 

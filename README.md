@@ -10,9 +10,9 @@ All scripts follow a **display-only** philosophy: they show information derived 
 
 | Script | Bubble | Purpose | API Calls |
 |---|---|---|---|
-| [**AI Advisor**](torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, advice | None — passive interception only |
+| [**AI Advisor**](torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, war timing, drug-free energy plan | Direct API fetching + passive interception |
 | [**Deal Finder**](torn-pda-deal-finder-bubble.md) | Green "DF" | Item Market / Bazaar flip-profit calculator | None — DOM scraping + passive interception |
-| [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis | `faction/{id}?selections=basic` (1 call / 60s) |
+| [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis, attack links | `faction/{id}?selections=basic` (configurable 30s–10min) |
 
 ---
 
@@ -28,13 +28,24 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 
 ### 2. Minimal Data Footprint
 
-- **AI Advisor** and **Deal Finder** make **zero** additional network requests. They passively read API responses that Torn PDA (or the browser) already sends and scrape visible DOM content.
-- **War Bubble** makes **one** read-only API call per 60-second polling cycle (only while the panel is open) using the minimum `selections=basic` endpoint.
+- **Deal Finder** makes **zero** additional network requests. It passively reads API responses that Torn PDA (or the browser) already sends and scrapes visible DOM content.
+- **AI Advisor** makes direct API calls for `user` and `faction` data using the user's own key, and also passively intercepts existing traffic for additional data.
+- **War Bubble** makes **one** read-only API call per polling cycle (configurable: 30s / 1min / 2min / 5min / 10min, only while the panel is open) using the minimum `selections=basic` endpoint.
 
 ### 3. Transparent API Key Handling
 
-- **AI Advisor** and **Deal Finder** do not touch API keys at all.
-- **War Bubble** prefers a **manually entered** API key (stored in `localStorage`). As a fallback, it can detect the key from Torn PDA's own network traffic (stored in memory only, never persisted, never sent externally). The key is used exclusively for direct calls to `api.torn.com`.
+All scripts that need an API key use a three-tier priority system:
+
+| Priority | Source | How | Storage |
+|---|---|---|---|
+| 1 (highest) | **Torn PDA injection** | PDA replaces `###PDA-APIKEY###` in the script source at injection time | In-memory (part of script source) |
+| 2 | **Manual entry** | User pastes key in the panel's key field | `localStorage` |
+| 3 (lowest) | **Network interception** | Reads the `key=` param from Torn API URLs that PDA/browser sends | In-memory only |
+
+- In **Torn PDA**, the key is loaded automatically — no user action needed.
+- In **Tampermonkey/Greasemonkey**, use the manual entry field (PDA injection is unavailable).
+- **Deal Finder** does not use any API key.
+- The key is **never sent to any external server** — only to `api.torn.com`.
 
 ### 4. Local-Only Data
 
@@ -50,9 +61,9 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 |---|---|---|---|
 | No game-action automation | Compliant | Compliant | Compliant |
 | One-click-one-action | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | No key used | No key used | Manual entry preferred; fallback uses user's own key from PDA traffic |
-| No external server comms | Compliant | Compliant | Only `api.torn.com` |
-| API rate limits respected | N/A | N/A | 1 req/60s (well under 100/min) |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | No key used | PDA key auto-injected; manual fallback; own key only |
+| No external server comms | Only `api.torn.com` | Compliant | Only `api.torn.com` |
+| API rate limits respected | On-demand only | N/A | Configurable 30s–10min (well under 100/min) |
 | No request modification | Compliant | Compliant | Compliant |
 | Read-only display | Compliant | Compliant | Compliant |
 
@@ -79,6 +90,7 @@ All three scripts share a common bubble/panel architecture:
 - **Viewport clamping** — panels and bubbles stay within the visible area on resize
 - **Deep merge** — API payloads are incrementally merged into state so partial responses build up a complete picture over time
 - **HTML escaping** — all user-facing text is escaped via `escapeHtml()` to prevent XSS
+- **Debug log** — collapsible log panel at the bottom of each script's panel with timestamped entries and a "Copy Log" button for easy bug reporting
 - **Stacked z-index** — each bubble/panel uses a separate z-index base so multiple overlays can coexist
 
 ### Shared Utility Functions (duplicated in each script)
@@ -91,6 +103,7 @@ All three scripts share a common bubble/panel architecture:
 | `formatSeconds(sec)` | Human-readable duration (e.g., `2d 5h 30m`) |
 | `ageText(ts)` | "X ago" relative time |
 | `escapeHtml(str)` | XSS-safe HTML escaping |
+| `addLog(msg)` | Appends timestamped entry to debug log (max 100 entries) |
 | `getStorage(key, fallback)` | Safe localStorage getter |
 | `setStorage(key, value)` | Safe localStorage setter |
 | `clampToViewport(...)` | Keep elements within visible bounds |
@@ -143,15 +156,25 @@ During the review process, the following improvements were made:
 
 1. **Bug fix (AI Advisor):** `makeDraggableBubble` initialized `startX`/`startY` as `0` but compared them to `null`, meaning the drag-end handler could never fire on the first drag. Fixed to initialize as `null`.
 
-2. **API key handling (War Bubble):** Added a manual API key input field as the **preferred** method, with the network-interception fallback clearly documented. The manual key is persisted in `localStorage`; the intercepted key remains memory-only.
+2. **Automatic PDA key injection (AI Advisor, War Bubble):** Scripts use the `###PDA-APIKEY###` placeholder that Torn PDA replaces at injection time, so the API key is loaded automatically with zero user config. Manual entry is kept as a fallback for non-PDA environments.
 
-3. **Cache expiry (Deal Finder):** Added automatic cache pruning — max 200 items, 7-day TTL — to prevent unbounded `localStorage` growth.
+3. **Direct API fetching (AI Advisor):** Added `fetchDirectData()` for `user` and `faction` endpoints, since Torn PDA's native API calls bypass the WebView and are invisible to fetch/XHR hooks.
 
-4. **Timer track cleanup (War Bubble):** Added automatic pruning of the timer-change history — max 500 entries, 7-day TTL — to prevent unbounded `localStorage` growth.
+4. **War timing & drug-free energy plan (AI Advisor):** New advisory cards for faction war readiness and optimal drug-free energy usage.
 
-5. **DOM scraping optimization (Deal Finder):** `scrapeListingsFromDom()` now tries targeted CSS selectors first (`.items-list li`, `[class*="market"] li`, etc.) before falling back to the broad `li, tr, div` scan, improving performance on mobile devices.
+5. **Configurable poll interval (War Bubble):** Dropdown to set the refresh rate: 30s / 1min / 2min / 5min / 10min (default 1min).
 
-6. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
+6. **Attack buttons (War Bubble):** Each enemy member row has Copy Attack URL, Copy Name, and "Go Attack" link buttons.
+
+7. **Cache expiry (Deal Finder):** Added automatic cache pruning — max 200 items, 7-day TTL — to prevent unbounded `localStorage` growth.
+
+8. **Timer track cleanup (War Bubble):** Added automatic pruning of the timer-change history — max 500 entries, 7-day TTL — to prevent unbounded `localStorage` growth.
+
+9. **DOM scraping optimization (Deal Finder):** `scrapeListingsFromDom()` now tries targeted CSS selectors first before falling back to the broad `li, tr, div` scan, improving performance on mobile devices.
+
+10. **Debug log panels (all scripts):** Collapsible log section at the bottom of each panel with timestamped event entries and a "Copy Log" button for sharing during bug reports.
+
+11. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
 
 ---
 

@@ -16,61 +16,64 @@ It displays a draggable red bubble that expands into a panel showing enemy facti
 | **Location inference** | Detects hospital, jail, federal jail, traveling, abroad, or in-Torn status from member data |
 | **Timer extraction** | Parses hospital/jail/travel remaining time from multiple possible API fields (timestamps, text durations, numeric seconds) |
 | **Fast-drop detection** | Compares consecutive timer readings to flag members whose timers dropped faster than wall-clock time (> 45s discrepancy), suggesting bail/bust/revive activity |
+| **Attack buttons** | Each member row has "Copy Attack URL", "Copy Name", and "Go Attack" link buttons |
 | **Manual faction ID** | Allows the user to manually enter an enemy faction ID if auto-detection fails |
-| **Manual API key** | Allows the user to paste their API key directly (preferred method); falls back to detecting the key from Torn PDA network traffic |
-| **Auto-polling** | Refreshes every 60 seconds when the panel is open |
+| **Configurable poll interval** | Dropdown to set refresh rate: 30s / 1min / 2min / 5min / 10min |
+| **Debug log** | Collapsible log panel with timestamped events and a "Copy Log" button for bug reporting |
 
 ## How It Works
 
 ```
-┌────────────────────────────┐
-│  Torn PDA makes API calls  │
-│  (normal app traffic)      │
-│                            │
-│  hookFetch / hookXHR       │──▷ extractApiKeyFromUrl()
-│  (passive, read-only)      │    Captures the user's own key
-└────────────────────────────┘    from URL params (fallback only;
-                                   manual key entry is preferred)
-                │
-   ┌────────────▼────────────┐
-   │  refreshEnemyFactionData │
-   │  fetch(api.torn.com/     │
-   │    faction/{id}?         │──▷ One read-only API call
-   │    selections=basic&     │    per refresh cycle
-   │    key=...)              │
-   └────────────┬────────────┘
-                │
-   ┌────────────▼────────────┐
-   │  normalizeMembers()      │
-   │  memberLastActionInfo()  │──▷ Parse & enrich each member
-   │  inferLocationState()    │
-   │  extractTimerInfo()      │
-   │  analyzeTimerChange()    │
-   └────────────┬────────────┘
-                │
-   ┌────────────▼────────────┐
-   │  groupedMembers()        │──▷ Bucket into display groups
-   │  renderPanel()           │
-   └─────────────────────────┘
+┌────────────────────────────────────────────────┐
+│            API Key Resolution                   │
+│                                                 │
+│  Priority 1: ###PDA-APIKEY### (Torn PDA auto)  │
+│  Priority 2: Manual entry (localStorage)        │
+│  Priority 3: Network interception (fallback)    │
+└──────────────────┬─────────────────────────────┘
+                   │
+   ┌───────────────▼────────────┐
+   │  refreshEnemyFactionData    │
+   │  fetch(api.torn.com/        │
+   │    faction/{id}?            │──▷ One read-only API call
+   │    selections=basic&        │    per refresh cycle
+   │    key=...)                 │
+   └───────────────┬────────────┘
+                   │
+   ┌───────────────▼────────────┐
+   │  normalizeMembers()         │
+   │  memberLastActionInfo()     │──▷ Parse & enrich each member
+   │  inferLocationState()       │
+   │  extractTimerInfo()         │
+   │  analyzeTimerChange()       │
+   └───────────────┬────────────┘
+                   │
+   ┌───────────────▼────────────┐
+   │  groupedMembers()           │──▷ Bucket into display groups
+   │  renderPanel()              │
+   └────────────────────────────┘
 ```
 
 ## API Key Handling
 
-The script needs a Torn API key to fetch enemy faction data. Two methods are supported:
+The script needs a Torn API key to fetch enemy faction data. Three methods are supported:
 
-| Method | How | Storage | Priority |
+| Priority | Source | How | Storage |
 |---|---|---|---|
-| **Manual entry** (preferred) | User pastes their key into the panel's "API key" field | `localStorage` (encrypted at rest by the browser) | Highest — used first if available |
-| **Network interception** (fallback) | Reads the `key=` parameter from Torn API URLs that Torn PDA already sends | In-memory only (`STATE.apiKey`) — never written to disk | Used only if no manual key is saved |
+| 1 (highest) | **Torn PDA injection** | PDA replaces `###PDA-APIKEY###` in the script source at injection time | In-memory (part of script source) |
+| 2 | **Manual entry** | User pastes key in the panel's key field | `localStorage` |
+| 3 (lowest) | **Network interception** | Reads the `key=` param from Torn API URLs that PDA sends | In-memory only — never persisted |
 
-**The API key is never sent to any external server.** All API calls go directly to `api.torn.com`.
+- In **Torn PDA**, the key loads automatically — no user action needed.
+- In **Tampermonkey/Greasemonkey**, use the manual entry field.
+- **The API key is never sent to any external server.** All API calls go directly to `api.torn.com`.
 
 ## Data Sources
 
 | Source | Method | Notes |
 |---|---|---|
-| Enemy faction members | Direct API call: `api.torn.com/faction/{id}?selections=basic` | One call per poll cycle (60s when panel is open) |
-| API key | Manual entry (preferred) or passive interception from PDA traffic (fallback) | See table above |
+| Enemy faction members | Direct API call: `api.torn.com/faction/{id}?selections=basic` | One call per poll cycle (configurable interval) |
+| API key | PDA injection (primary), manual entry, or passive interception (fallback) | See table above |
 | Enemy faction ID | Auto-detected from URL / page links, or manually entered | Stored in `localStorage` |
 | Timer history | Computed from consecutive API responses | Stored in `localStorage` (max 500 entries, 7-day expiry) |
 
@@ -79,19 +82,21 @@ The script needs a Torn API key to fetch enemy faction data. Two methods are sup
 | Rule | Status |
 |---|---|
 | No automation of game actions | Fully compliant — the script never attacks, bails, busts, revives, or triggers any game action |
-| One-click-one-action principle | Fully compliant — no game actions are triggered |
+| One-click-one-action principle | Fully compliant — attack buttons open URLs or copy text (one click = one browser action) |
 | Read-only data display | Fully compliant — all data shown is from the Torn API `basic` selection, displayed in an overlay |
-| API key handling | Manual entry is the preferred path; fallback interception only reads the user's own key from their own PDA traffic, stored in memory only |
-| API rate limiting | One call per 60 seconds when the panel is open; no calls when minimized; well within the ~100/min rate limit |
+| API key handling | Uses PDA's own injection mechanism; manual entry as fallback; the user's own key only |
+| API rate limiting | Configurable interval (30s–10min, default 1min) when panel is open; no calls when minimized; well within the ~100/min rate limit |
 | No external server communication | Fully compliant — the only outbound call is to `api.torn.com` |
 | Faction data access | Uses `selections=basic` (the minimum needed) — does not request sensitive selections |
 | Fast-drop detection | Passive analysis of timer deltas — no actions are taken; it only highlights the information |
-| localStorage usage | Timer track history (max 500 entries, 7-day TTL), faction ID, API key (if manually entered), UI positions |
+| Attack buttons | Standard one-click links: "Go Attack" opens the attack page, copy buttons copy text to clipboard — same as manually clicking a profile link |
+| localStorage usage | Timer track history (max 500 entries, 7-day TTL), faction ID, API key (if manually entered), poll interval preference, UI positions |
 
 ### Policy Notes
 
 - **Viewing enemy faction online status is allowed** — this is public information accessible via the Torn API's `faction/basic` endpoint, the same data visible on the faction page.
 - **Timer analysis** is advisory only and does not interact with the game in any way.
+- **Attack buttons** do not automate attacks — they provide links/clipboard text that the user must manually act on (one click = one action).
 - The script follows the same patterns as established community tools (TornTools, YATA) that display faction member status.
 
 ## Installation
@@ -102,20 +107,25 @@ The script needs a Torn API key to fetch enemy faction data. Two methods are sup
 3. Paste the contents of `torn-war-bubble.user.js`
 4. Set the match pattern to `https://www.torn.com/*`
 5. Save and reload any Torn page
+6. The API key is loaded automatically — no configuration needed
 
 ### Tampermonkey / Greasemonkey
 1. Install the Tampermonkey or Greasemonkey browser extension
 2. Create a new script and paste the contents of `torn-war-bubble.user.js`
 3. Save — the script will activate on all `torn.com` pages
+4. Open the panel and enter your Torn API key in the key field
 
 ## UI Controls
 
 - **Bubble (red, "WAR")** — tap to expand; drag to reposition
 - **Refresh** button — immediately fetches fresh faction data
 - **○** button — collapses the panel back to the bubble
-- **API key field** — paste your Torn API key here (recommended over auto-detection)
+- **Poll interval dropdown** — set refresh rate: 30s / 1min / 2min / 5min / 10min
+- **API key field** — manual key entry (optional in Torn PDA, required in Tampermonkey)
 - **Manual faction ID** — enter the enemy faction ID if auto-detection doesn't work
-- Auto-polling runs every 60 seconds while the panel is open; stops when minimized
+- **Attack buttons** — per-member: "Go Attack" (link), "Copy URL", "Copy Name"
+- **Debug Log** section — tap the header to expand; "Copy Log" copies all entries to clipboard
+- Auto-polling runs at the configured interval while the panel is open; stops when minimized
 
 ## Limitations
 
@@ -123,3 +133,4 @@ The script needs a Torn API key to fetch enemy faction data. Two methods are sup
 - Timer accuracy depends on the precision of the API response fields.
 - Fast-drop detection uses a 45-second threshold to avoid false positives from normal API timing variance.
 - The script can only track one enemy faction at a time.
+- Outside Torn PDA, the `###PDA-APIKEY###` placeholder is not replaced, so manual key entry is required.
