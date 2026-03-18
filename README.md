@@ -10,9 +10,9 @@ All scripts follow a **display-only** philosophy: they show information derived 
 
 | Script | Bubble | Purpose | API Calls |
 |---|---|---|---|
-| [**AI Advisor**](docs/torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, advice | None — passive interception only |
-| [**Deal Finder**](docs/torn-pda-deal-finder-bubble.md) | Green "DF" | Item Market / Bazaar flip-profit calculator | None — DOM scraping + passive interception |
-| [**War Bubble**](docs/torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis | `faction/{id}?selections=basic` (1 call / 60s) |
+| [**AI Advisor**](torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, advice | None — passive interception only |
+| [**Deal Finder**](torn-pda-deal-finder-bubble.md) | Green "DF" | Item Market / Bazaar flip-profit calculator | None — DOM scraping + passive interception |
+| [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis | `faction/{id}?selections=basic` (1 call / 60s) |
 
 ---
 
@@ -126,13 +126,13 @@ All three scripts can run simultaneously. They use separate z-index bases and au
 ```
 Torn_Dark_tools/
 ├── README.md                              ← this file
+├── urls                                   ← raw GitHub URLs for Torn PDA remote loading
 ├── torn-assistant.user.js                 ← AI Advisor bubble script
+├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble script
+├── torn-pda-deal-finder-bubble.md         ← Deal Finder documentation
 ├── torn-war-bubble.user.js                ← War Online bubble script
-└── docs/
-    ├── torn-assistant.md                  ← AI Advisor documentation
-    ├── torn-pda-deal-finder-bubble.md     ← Deal Finder documentation
-    └── torn-war-bubble.md                 ← War Bubble documentation
+└── torn-war-bubble.md                     ← War Bubble documentation
 ```
 
 ---
