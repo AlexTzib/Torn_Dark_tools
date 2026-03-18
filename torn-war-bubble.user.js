@@ -920,25 +920,58 @@
     return `<div class="war-fastdrop">Timer dropped faster than expected${escapeHtml(delta)}</div>`;
   }
 
+  function attackUrl(memberId) {
+    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(memberId)}`;
+  }
+
+  function copyToClipboard(text, buttonEl) {
+    navigator.clipboard.writeText(text).then(() => {
+      if (buttonEl) {
+        const orig = buttonEl.textContent;
+        buttonEl.textContent = 'Copied!';
+        setTimeout(() => { buttonEl.textContent = orig; }, 1200);
+      }
+    }).catch(() => {});
+  }
+
   function renderMemberList(list, cls) {
     if (!list.length) {
       return `<div class="war-muted">None</div>`;
     }
 
-    return list.map(m => `
-      <div style="padding:6px 0;border-top:1px solid #2a2d38;">
-        <div class="${cls}">
-          <strong>${escapeHtml(m.name)}</strong>
-          ${m.level ? ` • Lv ${escapeHtml(m.level)}` : ''}
-          ${m.position ? ` • ${escapeHtml(m.position)}` : ''}
+    return list.map(m => {
+      const mid = escapeHtml(m.id);
+      const mname = escapeHtml(m.name);
+      const atkUrl = attackUrl(m.id);
+      return `
+        <div style="padding:6px 0;border-top:1px solid #2a2d38;">
+          <div class="${cls}">
+            <strong>${mname}</strong>
+            ${m.level ? ` • Lv ${escapeHtml(m.level)}` : ''}
+            ${m.position ? ` • ${escapeHtml(m.position)}` : ''}
+          </div>
+          <div style="font-size:12px;color:#bbb;">
+            ${m.isOnline ? 'Online now' : `Last action: ${escapeHtml(m.relative || `${m.minutes}m`)}`} • ${escapeHtml(m.locationLabel)}
+          </div>
+          <div style="font-size:12px;color:#bbb;">${escapeHtml(timerText(m))}</div>
+          ${verifyText(m)}
+          <div style="margin-top:4px;display:flex;gap:6px;">
+            <button class="tpda-war-copy-btn" data-copy="${escapeHtml(atkUrl)}"
+                    style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Attack URL
+            </button>
+            <button class="tpda-war-copy-btn" data-copy="${mname}"
+                    style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy Name
+            </button>
+            <a href="${escapeHtml(atkUrl)}" target="_blank" rel="noopener"
+               style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;display:inline-block;">
+              Go Attack
+            </a>
+          </div>
         </div>
-        <div style="font-size:12px;color:#bbb;">
-          ${m.isOnline ? 'Online now' : `Last action: ${escapeHtml(m.relative || `${m.minutes}m`)}`} • ${escapeHtml(m.locationLabel)}
-        </div>
-        <div style="font-size:12px;color:#bbb;">${escapeHtml(timerText(m))}</div>
-        ${verifyText(m)}
-      </div>
-    `).join('');
+      `;
+    }).join('');
   }
 
   function renderPanel() {
@@ -1068,6 +1101,17 @@
         savePollMs(ms);
         restartPolling();
       };
+    }
+
+    // Delegated click handler for copy buttons
+    const warBody = document.getElementById('tpda-war-body');
+    if (warBody) {
+      warBody.addEventListener('click', (e) => {
+        const btn = e.target.closest('.tpda-war-copy-btn');
+        if (!btn) return;
+        const text = btn.dataset.copy || '';
+        if (text) copyToClipboard(text, btn);
+      });
     }
   }
 
