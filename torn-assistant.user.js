@@ -99,6 +99,10 @@
 
   function formatNumber(n) { return Number(n || 0).toLocaleString(); }
   function formatMoney(n) { return '$' + Number(n || 0).toLocaleString(); }
+  function formatBar(bar) {
+    if (!bar || bar.current === undefined) return '—';
+    return formatNumber(bar.current) + ' / ' + formatNumber(bar.maximum);
+  }
 
   function formatSeconds(sec) {
     sec = Number(sec || 0);
@@ -172,17 +176,24 @@
   }
 
   async function fetchDirectData() {
-    if (!STATE.apiKey) return;
-    addLog('Fetching direct data...');
+    if (!STATE.apiKey) {
+      addLog('fetchDirectData skipped — no API key');
+      return;
+    }
+    addLog('Fetching direct data (source: ' + STATE.apiKeySource + ')...');
     try {
       const userUrl = `https://api.torn.com/user/?selections=bars,cooldowns,battlestats,stocks,money,profile&key=${encodeURIComponent(STATE.apiKey)}`;
       const userRes = await fetch(userUrl);
+      addLog('User API HTTP status: ' + userRes.status);
       const userData = await userRes.json();
       if (userData && !userData.error) {
-        addLog('User API response keys: ' + Object.keys(userData).join(', '));
+        addLog('User API keys: ' + Object.keys(userData).join(', '));
+        addLog('energy type: ' + typeof userData.energy + ', value: ' + JSON.stringify(userData.energy)?.substring(0, 120));
         mergeUserData(userData);
       } else if (userData?.error) {
         addLog('User API error: ' + (userData.error.error || JSON.stringify(userData.error)));
+      } else {
+        addLog('User API returned empty or null response');
       }
     } catch (e) {
       addLog('User fetch error: ' + (e.message || e));
@@ -620,6 +631,7 @@
 
   function expandPanelNearBubble() {
     STATE.ui.minimized = false;
+    addLog('Panel expanding — userData keys: ' + Object.keys(STATE.userData || {}).join(', '));
     const bubble = getBubbleEl();
     const panel = getPanelEl();
     if (!bubble || !panel) return;
@@ -1181,9 +1193,9 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Status</div>
         <div>Selections cached: ${getSelectionsPresent(user).join(', ') || 'none yet'}</div>
-        <div>Energy: ${formatNumber(bars.energy?.current)} / ${formatNumber(bars.energy?.maximum)}</div>
-        <div>Nerve: ${formatNumber(bars.nerve?.current)} / ${formatNumber(bars.nerve?.maximum)}</div>
-        <div>Happy: ${formatNumber(bars.happy?.current)} / ${formatNumber(bars.happy?.maximum)}</div>
+        <div>Energy: ${formatBar(bars.energy)}</div>
+        <div>Nerve: ${formatBar(bars.nerve)}</div>
+        <div>Happy: ${formatBar(bars.happy)}</div>
         <div>Drug CD: ${formatSeconds(cds.drug)}</div>
         <div>Booster CD: ${formatSeconds(cds.booster)}</div>
         <div>Medical CD: ${formatSeconds(cds.medical)}</div>
@@ -1197,18 +1209,18 @@
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Battle stats</div>
-        <div>STR: ${formatNumber(battlestats.strength)}</div>
-        <div>SPD: ${formatNumber(battlestats.speed)}</div>
-        <div>DEX: ${formatNumber(battlestats.dexterity)}</div>
-        <div>DEF: ${formatNumber(battlestats.defense)}</div>
+        <div>STR: ${battlestats.strength !== undefined ? formatNumber(battlestats.strength) : '—'}</div>
+        <div>SPD: ${battlestats.speed !== undefined ? formatNumber(battlestats.speed) : '—'}</div>
+        <div>DEX: ${battlestats.dexterity !== undefined ? formatNumber(battlestats.dexterity) : '—'}</div>
+        <div>DEF: ${battlestats.defense !== undefined ? formatNumber(battlestats.defense) : '—'}</div>
       </div>
 
       ${renderStockRoiCard(userStocks, tornStocks)}
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Funds seen</div>
-        <div>Cash on hand: ${money.cash_on_hand != null ? formatMoney(money.cash_on_hand) : 'unknown'}</div>
-        <div>Bank: ${money.money_bank != null ? formatMoney(money.money_bank) : 'unknown'}</div>
+        <div>Cash on hand: ${money.cash_on_hand != null ? formatMoney(money.cash_on_hand) : '—'}</div>
+        <div>Bank: ${money.money_bank != null ? formatMoney(money.money_bank) : '—'}</div>
       </div>
 
       <div style="padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
@@ -1301,7 +1313,14 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
       if (u.vault_amount !== undefined) u.money.money_bank = u.vault_amount;
     }
 
-    addLog('User data merged (energy: ' + (u.bars?.energy?.current ?? 'n/a') + '/' + (u.bars?.energy?.maximum ?? 'n/a') + ')');
+    const eC = u.bars?.energy?.current;
+    const eM = u.bars?.energy?.maximum;
+    addLog('Merge done — bars.energy: ' + (eC !== undefined ? eC + '/' + eM : 'MISSING') +
+           ', strength: ' + (u.battlestats?.strength ?? 'n/a') +
+           ', cash: ' + (u.money?.cash_on_hand ?? 'n/a'));
+    if (!u.bars?.energy) {
+      addLog('WARNING: bars.energy is ' + JSON.stringify(u.bars?.energy) + ', raw u.energy is ' + JSON.stringify(u.energy)?.substring(0, 100));
+    }
     STATE.lastSeen.user = nowTs();
     if (!STATE.ui.minimized) renderPanel();
   }
@@ -1435,7 +1454,12 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     createPanel();
     window.addEventListener('resize', onResize);
 
-    if (STATE.apiKey) fetchDirectData();
+    if (STATE.apiKey) {
+      addLog('Initial fetch starting (key source: ' + STATE.apiKeySource + ', key length: ' + STATE.apiKey.length + ')');
+      fetchDirectData();
+    } else {
+      addLog('No API key at init — will rely on network interception');
+    }
 
     console.log('[Torn AI Assistant] Bubble mode started.');
   }
