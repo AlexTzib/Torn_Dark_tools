@@ -19,9 +19,11 @@
   const STATE = {
     userData: {},
     tornData: {},
+    factionData: {},
     lastSeen: {
       user: 0,
-      torn: 0
+      torn: 0,
+      faction: 0
     },
     ui: {
       minimized: true,
@@ -697,6 +699,323 @@
     handle.addEventListener('pointercancel', finish);
   }
 
+  // ── Energy constants for drug-free planning ──
+  const ENERGY_REGEN_PER_MIN = 0.5;   // default: 5E per 10 min
+  const ENERGY_CAN_BOOST = 25;         // each energy can gives +25E (over cap)
+  const ENERGY_TARGET = 1000;
+
+  function evaluateDrugFreeEnergyPlan(user) {
+    const bars = user?.bars || {};
+    const cds = user?.cooldowns || {};
+
+    const eCur = Number(bars.energy?.current || 0);
+    const eMax = Number(bars.energy?.maximum || 0);
+    const hCur = Number(bars.happy?.current || 0);
+    const hMax = Number(bars.happy?.maximum || 0);
+    const boosterCd = Number(cds.booster || 0);
+
+    if (eMax <= 0) {
+      return {
+        ready: false,
+        message: 'No energy data cached yet.',
+        steps: [],
+        totalMinutes: null,
+        cansNeeded: 0
+      };
+    }
+
+    const steps = [];
+    let timeMinutes = 0;
+
+    // Step 1: Wait for booster cooldown
+    if (boosterCd > 0) {
+      const boosterMins = Math.ceil(boosterCd / 60);
+      steps.push({
+        label: 'Wait for booster cooldown',
+        detail: `${formatSeconds(boosterCd)} remaining`,
+        minutes: boosterMins
+      });
+      timeMinutes += boosterMins;
+    } else {
+      steps.push({
+        label: 'Booster cooldown',
+        detail: 'Ready now',
+        minutes: 0
+      });
+    }
+
+    // Step 2: Natural regen to cap (if not already at cap)
+    const energyAtBoosterReady = Math.min(eMax, eCur + (timeMinutes * ENERGY_REGEN_PER_MIN));
+    if (energyAtBoosterReady < eMax) {
+      const regenMins = Math.ceil((eMax - energyAtBoosterReady) / ENERGY_REGEN_PER_MIN);
+      steps.push({
+        label: 'Wait for energy to reach cap',
+        detail: `${formatNumber(Math.round(energyAtBoosterReady))}E → ${formatNumber(eMax)}E (~${regenMins} min)`,
+        minutes: regenMins
+      });
+      timeMinutes += regenMins;
+    } else {
+      steps.push({
+        label: 'Energy at cap',
+        detail: `${formatNumber(eMax)}E`,
+        minutes: 0
+      });
+    }
+
+    // Step 3: Use energy cans/drinks to go from cap to target
+    const cansNeeded = eMax >= ENERGY_TARGET ? 0 : Math.ceil((ENERGY_TARGET - eMax) / ENERGY_CAN_BOOST);
+    if (cansNeeded > 0) {
+      steps.push({
+        label: `Use ${cansNeeded} energy cans (+${ENERGY_CAN_BOOST}E each)`,
+        detail: `${formatNumber(eMax)}E → ${formatNumber(eMax + cansNeeded * ENERGY_CAN_BOOST)}E (uses booster cooldown per can)`,
+        minutes: 0
+      });
+    } else {
+      steps.push({
+        label: 'Energy cap already meets target',
+        detail: `${formatNumber(eMax)}E >= ${formatNumber(ENERGY_TARGET)}E target`,
+        minutes: 0
+      });
+    }
+
+    // Step 4: Happy boost via booster (needs booster CD ready)
+    const happyNote = hMax > 0
+      ? `Current: ${formatNumber(hCur)} / ${formatNumber(hMax)} — use Lollipops, Candy, etc. to spike before training`
+      : 'No happy data cached yet';
+    steps.push({
+      label: 'Boost happy with boosters',
+      detail: happyNote,
+      minutes: 0
+    });
+
+    const ready = boosterCd <= 0 && eCur >= eMax * 0.8;
+    const readyLabel = ready
+      ? 'Close to ready — booster CD is clear and energy is high'
+      : `Estimated ${formatSeconds(timeMinutes * 60)} until setup window`;
+
+    return {
+      ready,
+      message: readyLabel,
+      steps,
+      totalMinutes: timeMinutes,
+      cansNeeded,
+      currentEnergy: eCur,
+      maxEnergy: eMax,
+      boosterCd
+    };
+  }
+
+  function evaluateWarTiming(factionData) {
+    const result = {
+      hasWarData: false,
+      wars: [],
+      nextWarLabel: 'No war data detected'
+    };
+
+    // Try ranked_wars
+    const rankedWars = factionData?.ranked_wars || factionData?.rankedwars || {};
+    for (const [id, war] of Object.entries(rankedWars)) {
+      const start = Number(war?.war?.start || war?.start || 0);
+      const end = Number(war?.war?.end || war?.end || 0);
+      const now = Math.floor(Date.now() / 1000);
+
+      if (start > 0) {
+        result.hasWarData = true;
+        const remaining = start - now;
+        if (remaining > 0) {
+          result.wars.push({
+            type: 'Ranked War',
+            id,
+            startsIn: remaining,
+            label: `Starts in ${formatSeconds(remaining)}`,
+            wallTime: new Date(start * 1000).toLocaleString()
+          });
+        } else if (end === 0 || end > now) {
+          result.wars.push({
+            type: 'Ranked War',
+            id,
+            startsIn: 0,
+            label: 'In progress',
+            wallTime: new Date(start * 1000).toLocaleString()
+          });
+        }
+      }
+    }
+
+    // Try territory / chain wars
+    const territoryWars = factionData?.territory_wars || factionData?.territory || {};
+    for (const [id, war] of Object.entries(territoryWars)) {
+      const start = Number(war?.start || war?.time_started || 0);
+      const end = Number(war?.end || war?.time_ended || 0);
+      const now = Math.floor(Date.now() / 1000);
+
+      if (start > 0) {
+        result.hasWarData = true;
+        const remaining = start - now;
+        if (remaining > 0) {
+          result.wars.push({
+            type: 'Territory War',
+            id,
+            startsIn: remaining,
+            label: `Starts in ${formatSeconds(remaining)}`,
+            wallTime: new Date(start * 1000).toLocaleString()
+          });
+        } else if (end === 0 || end > now) {
+          result.wars.push({
+            type: 'Territory War',
+            id,
+            startsIn: 0,
+            label: 'In progress',
+            wallTime: new Date(start * 1000).toLocaleString()
+          });
+        }
+      }
+    }
+
+    // Try generic war/wars field
+    const wars = factionData?.wars || factionData?.war || {};
+    if (typeof wars === 'object' && !Array.isArray(wars)) {
+      for (const [id, war] of Object.entries(wars)) {
+        const start = Number(war?.start || war?.time_started || war?.war_start || 0);
+        const end = Number(war?.end || war?.time_ended || war?.war_end || 0);
+        const now = Math.floor(Date.now() / 1000);
+
+        if (start > 0 && !result.wars.some(w => w.id === id)) {
+          result.hasWarData = true;
+          const remaining = start - now;
+          if (remaining > 0) {
+            result.wars.push({
+              type: 'War',
+              id,
+              startsIn: remaining,
+              label: `Starts in ${formatSeconds(remaining)}`,
+              wallTime: new Date(start * 1000).toLocaleString()
+            });
+          } else if (end === 0 || end > now) {
+            result.wars.push({
+              type: 'War',
+              id,
+              startsIn: 0,
+              label: 'In progress',
+              wallTime: new Date(start * 1000).toLocaleString()
+            });
+          }
+        }
+      }
+    }
+
+    result.wars.sort((a, b) => a.startsIn - b.startsIn);
+
+    if (result.wars.length) {
+      const next = result.wars[0];
+      result.nextWarLabel = next.startsIn > 0
+        ? `Next: ${next.type} starts in ${formatSeconds(next.startsIn)} (${next.wallTime})`
+        : `${next.type} is currently in progress (started ${next.wallTime})`;
+    }
+
+    return result;
+  }
+
+  function evaluateBoosterWarAlignment(user, factionData) {
+    const cds = user?.cooldowns || {};
+    const boosterCd = Number(cds.booster || 0);
+    const warInfo = evaluateWarTiming(factionData);
+
+    const notes = [];
+
+    if (!warInfo.hasWarData) {
+      notes.push('No war data available — visit your faction page to cache it.');
+      return { notes, warInfo, boosterCd, aligned: false };
+    }
+
+    const nextWar = warInfo.wars[0];
+    if (!nextWar) {
+      notes.push('No upcoming or active wars detected.');
+      return { notes, warInfo, boosterCd, aligned: false };
+    }
+
+    if (nextWar.startsIn === 0) {
+      // War in progress
+      if (boosterCd <= 0) {
+        notes.push('War is active and booster cooldown is ready — good to go.');
+        return { notes, warInfo, boosterCd, aligned: true };
+      } else {
+        notes.push(`War is active but booster cooldown has ${formatSeconds(boosterCd)} left.`);
+        return { notes, warInfo, boosterCd, aligned: false };
+      }
+    }
+
+    // War upcoming
+    if (boosterCd <= 0) {
+      notes.push(`Booster cooldown is ready. War starts in ${formatSeconds(nextWar.startsIn)}.`);
+      notes.push('You can use boosters now, or save them closer to war start.');
+      return { notes, warInfo, boosterCd, aligned: true };
+    }
+
+    if (boosterCd <= nextWar.startsIn) {
+      const buffer = nextWar.startsIn - boosterCd;
+      notes.push(`Booster cooldown clears ${formatSeconds(buffer)} before war starts — aligned.`);
+      return { notes, warInfo, boosterCd, aligned: true };
+    }
+
+    const overshoot = boosterCd - nextWar.startsIn;
+    notes.push(`Booster cooldown clears ${formatSeconds(overshoot)} AFTER war starts — you will be late.`);
+    notes.push('Consider whether you can clear cooldown earlier or plan around it.');
+    return { notes, warInfo, boosterCd, aligned: false };
+  }
+
+  function renderDrugFreeEnergyCard(user) {
+    const plan = evaluateDrugFreeEnergyPlan(user);
+
+    const stepsHtml = plan.steps.map((s, i) => `
+      <div style="padding:6px 0;${i ? 'border-top:1px solid #2a2d38;' : ''}">
+        <div><strong>Step ${i + 1}:</strong> ${escapeHtml(s.label)}</div>
+        <div style="font-size:12px;color:#bbb;">${escapeHtml(s.detail)}${s.minutes > 0 ? ` (~${s.minutes} min)` : ''}</div>
+      </div>
+    `).join('');
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">Drug-Free Energy Plan (Target: ${formatNumber(ENERGY_TARGET)}E)</div>
+        <div style="margin-bottom:8px;color:${plan.ready ? '#8dff8d' : '#ffd166'};">
+          ${escapeHtml(plan.message)}
+        </div>
+        <div style="font-size:12px;color:#bbb;margin-bottom:6px;">
+          Reach ${formatNumber(ENERGY_TARGET)} energy using natural regen + energy cans (no Xanax). Assumes ${ENERGY_REGEN_PER_MIN * 10}E per 10 min regen rate.
+        </div>
+        ${stepsHtml}
+        ${plan.cansNeeded > 0 ? `<div style="margin-top:6px;font-size:12px;color:#bbb;">Total energy cans needed: <strong>${plan.cansNeeded}</strong></div>` : ''}
+      </div>
+    `;
+  }
+
+  function renderWarTimingCard(user, factionData) {
+    const alignment = evaluateBoosterWarAlignment(user, factionData);
+    const warInfo = alignment.warInfo;
+
+    let warsHtml = '';
+    if (warInfo.wars.length) {
+      warsHtml = warInfo.wars.map(w => `
+        <div style="padding:4px 0;">
+          <div>${escapeHtml(w.type)}: <strong>${escapeHtml(w.label)}</strong></div>
+          <div style="font-size:12px;color:#bbb;">Started / starts: ${escapeHtml(w.wallTime)}</div>
+        </div>
+      `).join('');
+    }
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">War Timing & Booster Alignment</div>
+        <div style="margin-bottom:6px;">Booster CD: <strong>${alignment.boosterCd <= 0 ? 'Ready' : formatSeconds(alignment.boosterCd)}</strong></div>
+        ${warsHtml || '<div style="color:#bbb;">No wars detected. Visit your faction page to cache war data.</div>'}
+        <div style="margin-top:8px;padding-top:6px;border-top:1px solid #2a2d38;">
+          <div style="font-weight:bold;margin-bottom:4px;">Alignment</div>
+          ${alignment.notes.map(n => `<div style="color:${alignment.aligned ? '#8dff8d' : '#ffd166'};">• ${escapeHtml(n)}</div>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
   function renderHappyJumpCard(user) {
     const hj = evaluateHappyJump(user);
     return `
@@ -758,6 +1077,7 @@
 
     const user = STATE.userData || {};
     const torn = STATE.tornData || {};
+    const faction = STATE.factionData || {};
     const bars = user.bars || {};
     const cds = user.cooldowns || {};
     const battlestats = user.battlestats || {};
@@ -769,7 +1089,8 @@
     body.innerHTML = `
       <div style="margin-bottom:8px;color:#bbb;">
         User data seen: ${ageText(STATE.lastSeen.user)}<br>
-        Market data seen: ${ageText(STATE.lastSeen.torn)}
+        Market data seen: ${ageText(STATE.lastSeen.torn)}<br>
+        Faction data seen: ${ageText(STATE.lastSeen.faction)}
       </div>
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
@@ -783,7 +1104,11 @@
         <div>Medical CD: ${formatSeconds(cds.medical)}</div>
       </div>
 
+      ${renderWarTimingCard(user, faction)}
+
       ${renderHappyJumpCard(user)}
+
+      ${renderDrugFreeEnergyCard(user)}
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Battle stats</div>
@@ -820,12 +1145,20 @@
     if (!STATE.ui.minimized) renderPanel();
   }
 
+  function mergeFactionData(data) {
+    STATE.factionData = deepMerge(STATE.factionData, data);
+    STATE.lastSeen.faction = nowTs();
+    if (!STATE.ui.minimized) renderPanel();
+  }
+
   function handleApiPayload(url, data) {
     if (!data || data.error) return;
     if (typeof url !== 'string') return;
 
     if (url.includes('api.torn.com/user')) {
       mergeUserData(data);
+    } else if (url.includes('api.torn.com/faction')) {
+      mergeFactionData(data);
     } else if (url.includes('api.torn.com/torn')) {
       mergeTornData(data);
     }
