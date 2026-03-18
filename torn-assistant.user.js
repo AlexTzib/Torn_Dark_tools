@@ -20,6 +20,8 @@
     userData: {},
     tornData: {},
     factionData: {},
+    apiKey: null,
+    apiKeySource: '',
     lastSeen: {
       user: 0,
       torn: 0,
@@ -134,6 +136,47 @@
   function setStorage(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  }
+
+  function getManualApiKey() {
+    return getStorage(`${SCRIPT_KEY}_api_key`, '');
+  }
+
+  function setManualApiKey(key) {
+    setStorage(`${SCRIPT_KEY}_api_key`, key || '');
+  }
+
+  function extractApiKeyFromUrl(url) {
+    if (STATE.apiKeySource === 'manual') return;
+    try {
+      const u = new URL(url, location.origin);
+      const key = u.searchParams.get('key');
+      if (key && key.length >= 16) {
+        STATE.apiKey = key;
+        STATE.apiKeySource = 'intercepted';
+      }
+    } catch {}
+  }
+
+  async function fetchDirectData() {
+    if (!STATE.apiKey) return;
+    try {
+      const userUrl = `https://api.torn.com/user/?selections=bars,cooldowns,battlestats,stocks,money,profile&key=${encodeURIComponent(STATE.apiKey)}`;
+      const userRes = await fetch(userUrl);
+      const userData = await userRes.json();
+      if (userData && !userData.error) {
+        mergeUserData(userData);
+      }
+    } catch {}
+
+    try {
+      const factionUrl = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      const factionRes = await fetch(factionUrl);
+      const factionData = await factionRes.json();
+      if (factionData && !factionData.error) {
+        mergeFactionData(factionData);
+      }
     } catch {}
   }
 
@@ -543,7 +586,10 @@
 
     document.body.appendChild(panel);
 
-    document.getElementById('tpda-ai-refresh').addEventListener('click', renderPanel);
+    document.getElementById('tpda-ai-refresh').addEventListener('click', async () => {
+      await fetchDirectData();
+      renderPanel();
+    });
     document.getElementById('tpda-ai-collapse').addEventListener('click', collapseToBubble);
 
     makeDraggablePanel(panel, document.getElementById(HEADER_ID));
@@ -582,6 +628,7 @@
     }
 
     renderPanel();
+    fetchDirectData().then(renderPanel);
   }
 
   function collapseToBubble() {
@@ -1090,7 +1137,20 @@
       <div style="margin-bottom:8px;color:#bbb;">
         User data seen: ${ageText(STATE.lastSeen.user)}<br>
         Market data seen: ${ageText(STATE.lastSeen.torn)}<br>
-        Faction data seen: ${ageText(STATE.lastSeen.faction)}
+        Faction data seen: ${ageText(STATE.lastSeen.faction)}<br>
+        API key: ${STATE.apiKey ? `Active (${escapeHtml(STATE.apiKeySource)})` : 'Not set'}
+      </div>
+
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="font-weight:bold;margin-bottom:6px;">API Key</div>
+        <div style="font-size:11px;color:#bbb;margin-bottom:6px;">
+          Enter your key for direct data fetching. Stored in localStorage only.
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input id="tpda-ai-api-key-input" type="password" value="${escapeHtml(getManualApiKey())}" placeholder="Your Torn API key"
+                 style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
+          <button id="tpda-ai-save-key" style="background:#2a6df4;color:white;border:none;border-radius:8px;padding:6px 10px;">Save</button>
+        </div>
       </div>
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
@@ -1131,6 +1191,23 @@
         ${advice.map(x => `<div style="margin-bottom:8px;">• ${escapeHtml(x)}</div>`).join('')}
       </div>
     `;
+
+    const saveKeyBtn = document.getElementById('tpda-ai-save-key');
+    if (saveKeyBtn) {
+      saveKeyBtn.onclick = async () => {
+        const input = document.getElementById('tpda-ai-api-key-input');
+        const val = String(input?.value || '').trim();
+        setManualApiKey(val);
+        if (val) {
+          STATE.apiKey = val;
+          STATE.apiKeySource = 'manual';
+        } else {
+          STATE.apiKeySource = '';
+        }
+        await fetchDirectData();
+        renderPanel();
+      };
+    }
   }
 
   function mergeUserData(data) {
@@ -1173,6 +1250,7 @@
       try {
         const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
         if (url.includes('api.torn.com/')) {
+          extractApiKeyFromUrl(url);
           const clone = response.clone();
           const contentType = clone.headers.get('content-type') || '';
           if (contentType.includes('application/json') || contentType.includes('text/plain')) {
@@ -1192,6 +1270,11 @@
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
       this.__tpda_url = url;
+      try {
+        if (String(url || '').includes('api.torn.com/')) {
+          extractApiKeyFromUrl(String(url));
+        }
+      } catch {}
       return origOpen.call(this, method, url, ...rest);
     };
 
@@ -1235,6 +1318,12 @@
   }
 
   function init() {
+    const savedKey = getManualApiKey();
+    if (savedKey) {
+      STATE.apiKey = savedKey;
+      STATE.apiKeySource = 'manual';
+    }
+
     ensureStyles();
     hookFetch();
     hookXHR();
