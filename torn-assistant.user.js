@@ -31,7 +31,8 @@
       minimized: true,
       zIndexBase: 999990,
       bubbleSize: 56
-    }
+    },
+    _logs: []
   };
 
   const STOCK_RULES = {
@@ -122,6 +123,12 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
+  }
+
+  function addLog(msg) {
+    const ts = new Date().toLocaleTimeString();
+    STATE._logs.push(`[${ts}] ${msg}`);
+    if (STATE._logs.length > 100) STATE._logs.shift();
   }
 
   function getStorage(key, fallback) {

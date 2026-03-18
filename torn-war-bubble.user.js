@@ -43,7 +43,8 @@
     ui: {
       minimized: true,
       zIndexBase: 999970
-    }
+    },
+    _logs: []
   };
 
   function nowTs() {
@@ -93,6 +94,12 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
+  }
+
+  function addLog(msg) {
+    const ts = new Date().toLocaleTimeString();
+    STATE._logs.push(`[${ts}] ${msg}`);
+    if (STATE._logs.length > 100) STATE._logs.shift();
   }
 
   function getStorage(key, fallback) {
@@ -489,6 +496,7 @@
       if (key && key.length >= 16) {
         STATE.apiKey = key;
         STATE.apiKeySource = 'intercepted';
+        addLog('API key captured from network traffic');
       }
     } catch {}
   }
@@ -533,6 +541,7 @@
     const manual = getManualEnemyFactionId();
     if (manual) {
       STATE.enemyFactionId = String(manual);
+      addLog('Using manual faction ID: ' + manual);
       return;
     }
 
@@ -550,6 +559,7 @@
       const m = url.match(re);
       if (m) {
         STATE.enemyFactionId = m[1];
+        addLog('Detected faction ID from URL: ' + STATE.enemyFactionId);
         return;
       }
     }
@@ -561,6 +571,7 @@
       const m = href.match(/(?:factionID|factionid|ID)=(\d+)/i) || href.match(/\/faction\/(\d+)/i);
       if (m && (/enemy|opponent|rival|war/.test(text) || pageText.toLowerCase().includes('ranked war'))) {
         STATE.enemyFactionId = m[1];
+        addLog('Detected faction ID from URL: ' + STATE.enemyFactionId);
         return;
       }
     }
@@ -808,14 +819,17 @@
 
   async function refreshEnemyFactionData() {
     STATE.lastError = '';
+    addLog('Refreshing enemy faction data...');
 
     if (!STATE.enemyFactionId) {
       STATE.lastError = 'No enemy faction detected. Open the war/opponent page or set the faction ID manually.';
+      addLog('No enemy faction ID set');
       return;
     }
 
     if (!STATE.apiKey) {
       STATE.lastError = 'Torn PDA key not captured yet. Open a page that triggers Torn PDA API calls, then refresh.';
+      addLog('No API key available');
       return;
     }
 
@@ -860,8 +874,10 @@
       STATE.enemyMembers.sort((a, b) => a.minutes - b.minutes);
       STATE.lastFetchTs = nowTs();
       saveTimerTrack();
+      addLog('Fetched ' + STATE.enemyMembers.length + ' members from faction ' + STATE.enemyFactionId);
     } catch (err) {
       STATE.lastError = String(err?.message || err || 'Unknown error');
+      addLog('Fetch error: ' + STATE.lastError);
     }
   }
 
@@ -1076,6 +1092,7 @@
         } else {
           STATE.apiKeySource = '';
         }
+        addLog('Manual API key saved');
         await refreshEnemyFactionData();
         renderPanel();
       };
@@ -1088,6 +1105,7 @@
         const val = String(input?.value || '').trim();
         setManualEnemyFactionId(val);
         STATE.enemyFactionId = val || null;
+        addLog('Manual faction ID saved: ' + val);
         await refreshEnemyFactionData();
         renderPanel();
       };
@@ -1148,6 +1166,7 @@
       if (STATE.ui.minimized) return;
       if (!STATE.enemyFactionId || !STATE.apiKey) return;
       await refreshEnemyFactionData();
+      addLog('Poll cycle completed');
       renderPanel();
     }, STATE.pollMs);
   }
@@ -1173,6 +1192,7 @@
     window.addEventListener('resize', onResize);
     startPolling();
     console.log('[War Online Bubble - Location + Timers] Started.');
+    addLog('War Bubble initialized');
   }
 
   setTimeout(init, 1200);

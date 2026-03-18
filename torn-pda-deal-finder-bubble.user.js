@@ -43,7 +43,8 @@
       deals: [],
       lastScanAt: 0,
       message: 'Open an Item Market or Bazaar page, then tap Refresh.'
-    }
+    },
+    _logs: []
   };
 
   function nowTs() { return Date.now(); }
@@ -96,6 +97,12 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
+  }
+
+  function addLog(msg) {
+    const ts = new Date().toLocaleTimeString();
+    STATE._logs.push(`[${ts}] ${msg}`);
+    if (STATE._logs.length > 100) STATE._logs.shift();
   }
 
   function loadCache() {
@@ -473,12 +480,15 @@
     if (url.includes('api.torn.com/user')) {
       STATE.userData = deepMerge(STATE.userData, data);
       STATE.lastSeen.user = nowTs();
+      addLog('User API data received');
     } else if (url.includes('api.torn.com/torn')) {
       STATE.tornData = deepMerge(STATE.tornData, data);
       STATE.lastSeen.torn = nowTs();
+      addLog('Torn API data received');
     } else if (url.includes('api.torn.com/market')) {
       STATE.marketData = deepMerge(STATE.marketData, data);
       STATE.lastSeen.market = nowTs();
+      addLog('Market API data received');
     }
   }
 
@@ -706,6 +716,7 @@
     const itemKey = getItemKey(itemName, itemId);
 
     if (!context) {
+      addLog('Page context: not item market or bazaar');
       STATE.scan = {
         context: null,
         itemName: '',
@@ -718,9 +729,12 @@
       return;
     }
 
+    addLog('Page context: ' + context + ', item: ' + (itemName || 'unknown'));
+
     const listings = scrapeListingsFromDom();
 
     if (!listings.length) {
+      addLog('No listings detected on page');
       STATE.scan = {
         context,
         itemName,
@@ -787,6 +801,8 @@
     }
 
     deals.sort((a, b) => b.profit - a.profit);
+
+    addLog('Found ' + listings.length + ' listings, ' + deals.length + ' deals');
 
     let message = 'Scan complete.';
     if (!deals.length) {
