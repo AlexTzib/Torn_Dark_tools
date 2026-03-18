@@ -39,6 +39,7 @@
     enemyFactionId: null,
     enemyFactionName: '',
     enemyMembers: [],
+    detectedWarInfo: null,
     lastFetchTs: 0,
     lastError: '',
     pollMs: loadPollMs(),
@@ -541,7 +542,114 @@
     };
   }
 
-  function detectEnemyFaction() {
+  async function fetchOwnFactionWars() {
+    if (!STATE.apiKey) return null;
+    try {
+      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      addLog('Fetching own faction data for war detection...');
+      const res = await fetch(url, { method: 'GET' });
+      const data = await res.json();
+      if (data?.error) {
+        addLog('Own faction API error: ' + (data.error.error || JSON.stringify(data.error)));
+        return null;
+      }
+      const ownFactionId = String(data?.ID || data?.id || '');
+      if (!ownFactionId) {
+        addLog('Could not determine own faction ID from API response');
+        return null;
+      }
+      addLog('Own faction: ' + (data?.name || ownFactionId));
+
+      const now = Math.floor(Date.now() / 1000);
+      const candidates = [];
+
+      // Check ranked_wars
+      const rankedWars = data?.ranked_wars || data?.rankedwars || {};
+      for (const [warId, war] of Object.entries(rankedWars)) {
+        const start = Number(war?.war?.start || war?.start || 0);
+        const end = Number(war?.war?.end || war?.end || 0);
+        if (start <= 0) continue;
+        if (end > 0 && end < now) continue; // war already ended
+
+        // Find enemy faction from factions object
+        const factions = war?.factions || {};
+        for (const fid of Object.keys(factions)) {
+          if (String(fid) !== ownFactionId) {
+            candidates.push({
+              type: 'Ranked War',
+              enemyId: String(fid),
+              enemyName: factions[fid]?.name || '',
+              start,
+              startsIn: Math.max(0, start - now),
+              warId
+            });
+          }
+        }
+      }
+
+      // Check territory_wars
+      const territoryWars = data?.territory_wars || data?.territory || {};
+      for (const [warId, war] of Object.entries(territoryWars)) {
+        const start = Number(war?.start || war?.time_started || 0);
+        const end = Number(war?.end || war?.time_ended || 0);
+        if (start <= 0) continue;
+        if (end > 0 && end < now) continue;
+
+        const factions = war?.factions || {};
+        for (const fid of Object.keys(factions)) {
+          if (String(fid) !== ownFactionId) {
+            candidates.push({
+              type: 'Territory War',
+              enemyId: String(fid),
+              enemyName: factions[fid]?.name || '',
+              start,
+              startsIn: Math.max(0, start - now),
+              warId
+            });
+          }
+        }
+      }
+
+      // Check raid_wars
+      const raidWars = data?.raid_wars || data?.raids || {};
+      for (const [warId, war] of Object.entries(raidWars)) {
+        const start = Number(war?.start || war?.time_started || 0);
+        const end = Number(war?.end || war?.time_ended || 0);
+        if (start <= 0) continue;
+        if (end > 0 && end < now) continue;
+
+        const factions = war?.factions || {};
+        for (const fid of Object.keys(factions)) {
+          if (String(fid) !== ownFactionId) {
+            candidates.push({
+              type: 'Raid War',
+              enemyId: String(fid),
+              enemyName: factions[fid]?.name || '',
+              start,
+              startsIn: Math.max(0, start - now),
+              warId
+            });
+          }
+        }
+      }
+
+      if (!candidates.length) {
+        addLog('No active or upcoming wars found in own faction data');
+        return null;
+      }
+
+      // Prefer in-progress wars (startsIn === 0) first, then soonest upcoming
+      candidates.sort((a, b) => a.startsIn - b.startsIn);
+      const best = candidates[0];
+      addLog(`War detected: ${best.type} vs ${best.enemyName || best.enemyId} (${best.startsIn === 0 ? 'in progress' : 'starts in ' + formatSeconds(best.startsIn)})`);
+      return best;
+    } catch (err) {
+      addLog('Error fetching own faction wars: ' + (err?.message || err));
+      return null;
+    }
+  }
+
+  async function detectEnemyFaction() {
     const manual = getManualEnemyFactionId();
     if (manual) {
       STATE.enemyFactionId = String(manual);
@@ -575,9 +683,19 @@
       const m = href.match(/(?:factionID|factionid|ID)=(\d+)/i) || href.match(/\/faction\/(\d+)/i);
       if (m && (/enemy|opponent|rival|war/.test(text) || pageText.toLowerCase().includes('ranked war'))) {
         STATE.enemyFactionId = m[1];
-        addLog('Detected faction ID from URL: ' + STATE.enemyFactionId);
+        addLog('Detected faction ID from link: ' + STATE.enemyFactionId);
         return;
       }
+    }
+
+    // Fallback: query own faction API for active/upcoming wars
+    const warInfo = await fetchOwnFactionWars();
+    if (warInfo) {
+      STATE.enemyFactionId = warInfo.enemyId;
+      STATE.enemyFactionName = warInfo.enemyName || STATE.enemyFactionName;
+      STATE.detectedWarInfo = warInfo;
+      addLog('Auto-detected enemy faction from API: ' + warInfo.enemyId + ' (' + (warInfo.enemyName || 'unknown') + ')');
+      return;
     }
   }
 
@@ -826,7 +944,7 @@
     addLog('Refreshing enemy faction data...');
 
     if (!STATE.enemyFactionId) {
-      STATE.lastError = 'No enemy faction detected. Open the war/opponent page or set the faction ID manually.';
+      STATE.lastError = 'No enemy faction detected. Will auto-detect from scheduled wars, or set the faction ID manually.';
       addLog('No enemy faction ID set');
       return;
     }
@@ -998,6 +1116,11 @@
     const body = document.getElementById('tpda-war-body');
     if (!body) return;
 
+    // Recalculate startsIn for live countdown
+    if (STATE.detectedWarInfo && STATE.detectedWarInfo.start) {
+      STATE.detectedWarInfo.startsIn = Math.max(0, STATE.detectedWarInfo.start - Math.floor(Date.now() / 1000));
+    }
+
     const groups = groupedMembers();
 
     body.innerHTML = `
@@ -1005,6 +1128,13 @@
         <div style="font-weight:bold;margin-bottom:6px;">Target</div>
         <div>Enemy faction: ${escapeHtml(STATE.enemyFactionName || 'Unknown')}</div>
         <div>Faction ID: ${escapeHtml(STATE.enemyFactionId || 'Not set')}</div>
+        ${STATE.detectedWarInfo ? `<div style="color:#ffcc00;">
+          ${escapeHtml(STATE.detectedWarInfo.type)}: ${STATE.detectedWarInfo.startsIn > 0
+            ? 'starts in ' + formatSeconds(STATE.detectedWarInfo.startsIn)
+            : 'in progress'}
+          ${STATE.detectedWarInfo.start ? ' (' + new Date(STATE.detectedWarInfo.start * 1000).toLocaleString() + ')' : ''}
+        </div>` : ''}
+        ${!STATE.enemyFactionId ? '<div style="color:#ffb3b3;font-size:11px;">No war detected. Waiting for scheduled war or set faction ID manually below.</div>' : ''}
         <div>API key: ${STATE.apiKey ? `Active (${escapeHtml(STATE.apiKeySource || 'unknown source')})` : 'Not available'}</div>
         <div>Last refresh: ${ageText(STATE.lastFetchTs)}</div>
       </div>
@@ -1202,7 +1332,18 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     if (STATE.pollTimerId) clearInterval(STATE.pollTimerId);
     STATE.pollTimerId = setInterval(async () => {
       if (STATE.ui.minimized) return;
-      if (!STATE.enemyFactionId || !STATE.apiKey) return;
+      if (!STATE.apiKey) return;
+
+      // If no enemy faction yet, retry detection (catches scheduled wars via API)
+      if (!STATE.enemyFactionId) {
+        await detectEnemyFaction();
+        if (STATE.enemyFactionId) {
+          addLog('Enemy faction found during poll — starting data fetch');
+          renderPanel();
+        }
+      }
+
+      if (!STATE.enemyFactionId) return;
       await refreshEnemyFactionData();
       addLog('Poll cycle completed');
       renderPanel();
@@ -1213,7 +1354,7 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     startPolling();
   }
 
-  function init() {
+  async function init() {
     // Priority 1: PDA-injected key (automatic, zero config)
     if (PDA_INJECTED_KEY.length >= 16 && !PDA_INJECTED_KEY.includes('#')) {
       STATE.apiKey = PDA_INJECTED_KEY;
@@ -1238,11 +1379,15 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     hookXHR();
     createBubble();
     createPanel();
-    detectEnemyFaction();
+    await detectEnemyFaction();
     window.addEventListener('resize', onResize);
     startPolling();
     console.log('[War Online Bubble - Location + Timers] Started.');
     addLog('War Bubble initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
+    if (STATE.enemyFactionId) {
+      await refreshEnemyFactionData();
+      renderPanel();
+    }
   }
 
   setTimeout(init, 1200);
