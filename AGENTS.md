@@ -19,6 +19,7 @@ This file contains everything an AI agent (or human developer) needs to understa
 11. [Verification & Testing](#verification--testing)
 12. [Git Workflow](#git-workflow)
 13. [Torn API Reference](#torn-api-reference)
+14. [Community Research Reference](#community-research-reference)
 
 ---
 
@@ -29,7 +30,9 @@ Torn_Dark_tools/
 ├── AGENTS.md                              ← THIS FILE — developer reference
 ├── README.md                              ← User-facing project documentation
 ├── urls                                   ← Raw GitHub URLs for Torn PDA remote loading
-├── torn-assistant.user.js                 ← AI Advisor bubble (~1367 lines)
+├── docs/
+│   └── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
+├── torn-assistant.user.js                 ← AI Advisor bubble (~1517 lines)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble (~968 lines)
 ├── torn-pda-deal-finder-bubble.md         ← Deal Finder documentation
@@ -495,7 +498,32 @@ Never use inline `onclick="..."` in HTML strings.
 | `stocks` | `{ "stocks": {...} }` | `{ "stocks": { "1": {...} } }` | **YES** — nested |
 | `profile` | `{ "profile": {...} }` | `{ "name": "...", "player_id": 123, "level": 50, ... }` | **NO** — top level |
 
-**The `mergeUserData()` function in the AI Advisor normalizes this** by creating wrapper objects (`user.bars`, `user.battlestats`, `user.money`) from the flat top-level fields. If you add a new script that reads user data, either use the same normalization pattern or read from the correct top-level keys.
+### Torn API v2 Response Format Differences
+
+Torn PDA and extensions like TornTools may intercept V2 API calls with different field structures:
+
+| Field | V1 Format | V2 Format |
+|---|---|---|
+| Battle stats | `strength: 12345` (plain number at top level) | `battlestats.strength.value: 12345` (object with `.value`) |
+| Money | `money_onhand: 1000` (top level) | `money.wallet: 1000` (nested) |
+| Vault | `vault_amount: 500` (top level) | `money.cayman_bank: 500` (nested) |
+| Profile life | `life: { current, maximum }` (top level) | `profile.life: { current, maximum }` (nested under profile) |
+| Bars | Top-level objects | May already be nested under `bars` key |
+
+### API Response Normalization in mergeUserData()
+
+The `mergeUserData()` function in the AI Advisor handles **both V1 and V2 formats** using helper functions:
+
+- **`asBar(v)`** — extracts a bar value. Accepts `{ current, maximum }` objects directly, or converts a plain number to `{ current: n, maximum: n }`. Returns null for invalid values.
+- **`asStatNum(v)`** — extracts a numeric stat. Handles V1 plain numbers AND V2 `{ value: X }` objects.
+- **Priority system** for each data type:
+  1. Top-level fields (V1 format)
+  2. Already-nested fields (V2 or previous merge)
+  3. Profile-nested fields (V2 profile selection)
+
+**The `_tpda=1` URL marker** prevents double-processing: the script tags its own API calls with `&_tpda=1`, and the fetch/XHR hooks skip URLs containing this marker.
+
+**The `mergeUserData()` function in the AI Advisor normalizes this** by creating wrapper objects (`user.bars`, `user.battlestats`, `user.money`) from either V1 flat or V2 nested responses. If you add a new script that reads user data, either use the same normalization pattern or read from the correct keys directly.
 
 ---
 
@@ -637,11 +665,47 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 ```
 
 **After `mergeUserData()` normalization**, the code can read these via wrapper objects:
-- `user.bars.energy.current` (mapped from `user.energy.current`)
-- `user.battlestats.strength` (mapped from `user.strength`)
-- `user.money.cash_on_hand` (mapped from `user.money_onhand`)
+- `user.bars.energy.current` (mapped from `user.energy.current` in V1, or `user.bars.energy.current` in V2)
+- `user.battlestats.strength` (mapped from `user.strength` in V1, or `user.battlestats.strength.value` in V2)
+- `user.money.cash_on_hand` (mapped from `user.money_onhand` in V1, or `user.money.wallet` in V2)
 - `user.cooldowns.drug` (already nested — no mapping needed)
 - `user.stocks` (already nested — no mapping needed)
+
+---
+
+## Community Research Reference
+
+Key patterns learned from analyzing popular Torn community scripts (TornTools extension, Xoke scripts, tc-greasemonkey, etc.). Full details in `docs/torn-api-patterns.md`.
+
+### Patterns Worth Adopting
+
+| Pattern | Source | Description |
+|---|---|---|
+| `requireElement()` | TornTools | Promise-based polling (50ms intervals) that waits for DOM elements to appear. Essential for Torn's React SPA. |
+| `observeChain()` | TornTools | Chained MutationObserver for deeply nested dynamic content |
+| Event bus | TornTools | MutationObservers trigger custom events; features subscribe. Decouples detection from action |
+| Fetch/XHR interception | TornTools, our scripts | Monkey-patch fetch/XHR to read API responses without modifying them |
+| `dataset.end` timestamps | TornTools | Store absolute end-time instead of relative seconds for countdown timers (prevents desync when tab inactive) |
+| `isTabFocused()` guard | TornTools | Only fire sensitive events when tab is visible |
+| Virtual scroll handling | danielgoodwin97 | Programmatic scrolling to force render of virtualized list items |
+| Retal monitoring | Xoke | Monitor `api.torn.com/faction/{id}?selections=attacks` for unretaliated attacks |
+| `GM_xmlhttpRequest` | Xoke, tc-greasemonkey | Cross-origin API calls in Tampermonkey/Greasemonkey (not needed in PDA) |
+
+### Real Torn DOM Selectors (verified from TornTools source)
+
+| Element | Selector |
+|---|---|
+| Item market items | `[class*='itemList___'] > li` |
+| Item price | `[class*='priceAndTotal___'] span:first-child` |
+| Faction members | `.members-list .table-body > li` |
+| Drug cooldown | `[aria-label^='Drug Cooldown:']` |
+| Booster cooldown | `[aria-label^='Booster Cooldown:']` |
+| Medical cooldown | `[aria-label^='Medical Cooldown:']` |
+| Page loading | `.react-loading-skeleton` |
+| Chat root | `#chatRoot` |
+| Content wrapper | `.content-wrapper[role="main"]` |
+
+> **Note:** Torn uses CSS modules with hash suffixes (e.g., `itemList___abc123`). Use `[class*='itemList___']` partial match selectors instead of exact class names.
 
 ---
 

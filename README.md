@@ -6,6 +6,41 @@ All scripts follow a **display-only** philosophy: they show information derived 
 
 ---
 
+## What Each Tool Does
+
+### AI Advisor (Blue "AI" bubble)
+
+Your personal Torn assistant. It pulls your player data via the API and shows a dashboard with:
+
+- **Status bars** — energy, nerve, happy, life (current / max)
+- **Cooldowns** — drug, booster, medical countdowns
+- **Happy Jump Advisor** — scores your readiness for a happy jump (checks energy, happy, drug cooldown, booster cooldown) and tells you exactly what's blocking you
+- **Drug-Free Energy Plan** — shows how to get the most energy without drugs (e.g., "Use 2 cans + refill" or "Wait for booster CD then use 6-pack")
+- **War Timing & Booster Alignment** — when a faction war is active, checks if your booster cooldown will be clear before the war starts/resumes
+- **Stock Block ROI Helper** — for your stock holdings, shows how many shares you need for the next benefit block, estimated cost, and days-to-payback for cash-returning stocks
+- **Battle Stats** — STR/SPD/DEX/DEF at a glance
+- **Funds** — cash on hand and bank balance
+
+### Deal Finder (Green "DF" bubble)
+
+A flip-profit calculator for the Item Market and Bazaar. It scrapes the prices on the current page and calculates whether buying an item and reselling it would be profitable after Torn's 5% market tax. **Makes zero API calls** — it reads prices directly from the page DOM and passively listens to API traffic the app already sends.
+
+- Color-coded deals: green (>$500k profit), yellow (positive), red (loss)
+- Caches floor prices to track market trends
+- Works on both Item Market and Bazaar pages
+
+### War Bubble (Red "WAR" bubble)
+
+An enemy faction online tracker for faction wars. Enter (or auto-detect) the enemy faction ID and it shows:
+
+- **Online/idle/offline member counts** with last-action timestamps
+- **Location buckets** — who's in Torn, abroad, hospital, jail, traveling
+- **Hospital/jail timers** with analysis (detects faster-than-expected timer drops that could indicate revives or early releases)
+- **Attack buttons** per member — "Go Attack" link, "Copy URL", "Copy Name"
+- **Configurable polling** — 30s / 1min / 2min / 5min / 10min refresh rate
+
+---
+
 ## Scripts
 
 | Script | Bubble | Purpose | API Calls |
@@ -141,6 +176,8 @@ Torn_Dark_tools/
 ├── AGENTS.md                              ← Developer reference (architecture, PDA internals, policies)
 ├── README.md                              ← this file
 ├── urls                                   ← raw GitHub URLs for Torn PDA remote loading
+├── docs/
+│   └── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
 ├── torn-assistant.user.js                 ← AI Advisor bubble script
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble script
@@ -175,7 +212,7 @@ During the review process, the following improvements were made:
 
 10. **Debug log panels (all scripts):** Collapsible log section at the bottom of each panel with timestamped event entries and a "Copy Log" button for sharing during bug reports.
 
-11. **API response normalization (AI Advisor):** Torn API v1 returns bars (`energy`, `nerve`, etc.), battle stats, and money at the top level — not nested under wrapper objects. `mergeUserData()` now normalizes the flat response into the `user.bars`, `user.battlestats`, and `user.money` structures the rendering code expects. This fixed energy/stats showing 0/0.
+11. **API response normalization (AI Advisor):** Torn API v1 returns bars (`energy`, `nerve`, etc.), battle stats, and money at the top level — not nested under wrapper objects. `mergeUserData()` now normalizes both V1 (flat) and V2 (nested with `.value` properties) response formats into the `user.bars`, `user.battlestats`, and `user.money` structures the rendering code expects. Also handles PDA-intercepted V2 calls. Fixed energy/stats showing 0/0.
 
 12. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
 

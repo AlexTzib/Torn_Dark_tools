@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Safe AI Advisor Bubble
 // @namespace    alex.torn.pda.safe.ai.bubble
-// @version      3.0.0
+// @version      3.1.0
 // @description  Safe local Torn PDA advisor with draggable chat-head bubble and expandable panel
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -97,10 +97,10 @@
     return out;
   }
 
-  function formatNumber(n) { return Number(n || 0).toLocaleString(); }
-  function formatMoney(n) { return '$' + Number(n || 0).toLocaleString(); }
+  function formatNumber(n) { return Number(n ?? 0).toLocaleString(); }
+  function formatMoney(n) { return '$' + Number(n ?? 0).toLocaleString(); }
   function formatBar(bar) {
-    if (!bar || bar.current === undefined) return '—';
+    if (!bar || bar.current == null) return '—';
     return formatNumber(bar.current) + ' / ' + formatNumber(bar.maximum);
   }
 
@@ -182,13 +182,16 @@
     }
     addLog('Fetching direct data (source: ' + STATE.apiKeySource + ')...');
     try {
-      const userUrl = `https://api.torn.com/user/?selections=bars,cooldowns,battlestats,stocks,money,profile&key=${encodeURIComponent(STATE.apiKey)}`;
+      const userUrl = `https://api.torn.com/user/?selections=bars,cooldowns,battlestats,stocks,money,profile&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
       const userRes = await fetch(userUrl);
       addLog('User API HTTP status: ' + userRes.status);
       const userData = await userRes.json();
       if (userData && !userData.error) {
         addLog('User API keys: ' + Object.keys(userData).join(', '));
         addLog('energy type: ' + typeof userData.energy + ', value: ' + JSON.stringify(userData.energy)?.substring(0, 120));
+        addLog('strength type: ' + typeof userData.strength + ', value: ' + JSON.stringify(userData.strength)?.substring(0, 60));
+        addLog('money_onhand type: ' + typeof userData.money_onhand + ', value: ' + String(userData.money_onhand));
+        addLog('cooldowns: ' + JSON.stringify(userData.cooldowns)?.substring(0, 120));
         mergeUserData(userData);
       } else if (userData?.error) {
         addLog('User API error: ' + (userData.error.error || JSON.stringify(userData.error)));
@@ -200,7 +203,7 @@
     }
 
     try {
-      const factionUrl = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      const factionUrl = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
       const factionRes = await fetch(factionUrl);
       const factionData = await factionRes.json();
       if (factionData && !factionData.error) {
@@ -1209,10 +1212,10 @@
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Battle stats</div>
-        <div>STR: ${battlestats.strength !== undefined ? formatNumber(battlestats.strength) : '—'}</div>
-        <div>SPD: ${battlestats.speed !== undefined ? formatNumber(battlestats.speed) : '—'}</div>
-        <div>DEX: ${battlestats.dexterity !== undefined ? formatNumber(battlestats.dexterity) : '—'}</div>
-        <div>DEF: ${battlestats.defense !== undefined ? formatNumber(battlestats.defense) : '—'}</div>
+        <div>STR: ${battlestats.strength != null ? formatNumber(battlestats.strength) : '—'}</div>
+        <div>SPD: ${battlestats.speed != null ? formatNumber(battlestats.speed) : '—'}</div>
+        <div>DEX: ${battlestats.dexterity != null ? formatNumber(battlestats.dexterity) : '—'}</div>
+        <div>DEF: ${battlestats.defense != null ? formatNumber(battlestats.defense) : '—'}</div>
       </div>
 
       ${renderStockRoiCard(userStocks, tornStocks)}
@@ -1281,45 +1284,86 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     }
   }
 
+  // Helper: extract a bar value that's an object with {current, maximum}.
+  // Accepts the object directly or a plain number (converts to {current: n, maximum: n}).
+  function asBar(v) {
+    if (isObject(v) && v.current != null) return v;
+    if (typeof v === 'number' && isFinite(v)) return { current: v, maximum: v };
+    return null;
+  }
+
+  // Helper: extract a numeric stat value. V1 returns plain numbers, V2 returns {value: X}.
+  function asStatNum(v) {
+    if (typeof v === 'number') return v;
+    if (isObject(v) && v.value != null) return Number(v.value);
+    return undefined;
+  }
+
   function mergeUserData(data) {
     STATE.userData = deepMerge(STATE.userData, data);
 
-    // Normalize: Torn API v1 returns bars/stats/money at top level, not nested.
-    // Build the wrapper objects the rendering code expects.
+    // Normalize: Torn API v1 returns bars/stats/money at top level.
+    // Torn API v2 and Torn PDA intercepted calls may nest them differently.
+    // Handle both formats so the rendering code always finds the data.
     const u = STATE.userData;
 
-    // Bars: API returns energy/nerve/happy/life at top level
-    if (u.energy || u.nerve || u.happy || u.life) {
-      if (!u.bars) u.bars = {};
-      if (u.energy) u.bars.energy = u.energy;
-      if (u.nerve) u.bars.nerve = u.nerve;
-      if (u.happy) u.bars.happy = u.happy;
-      if (u.life) u.bars.life = u.life;
+    // --- Bars normalization ---
+    // V1: energy/nerve/happy/life as {current, maximum, ...} at top level
+    // V2/PDA: may already be under u.bars, or under u.profile
+    if (!u.bars) u.bars = {};
+    const barNames = ['energy', 'nerve', 'happy', 'life'];
+    for (const name of barNames) {
+      // Priority 1: top-level bar object (V1 format)
+      const topLevel = asBar(u[name]);
+      if (topLevel) { u.bars[name] = topLevel; continue; }
+      // Priority 2: already under bars (V2 or previous merge)
+      if (asBar(u.bars[name])) continue;
+      // Priority 3: under profile (V2 profile selection nests life)
+      const fromProfile = asBar(u.profile?.[name]);
+      if (fromProfile) u.bars[name] = fromProfile;
     }
 
-    // Battle stats: API returns strength/speed/dexterity/defense at top level
-    if (u.strength !== undefined || u.speed !== undefined || u.dexterity !== undefined || u.defense !== undefined) {
-      if (!u.battlestats) u.battlestats = {};
-      if (u.strength !== undefined) u.battlestats.strength = u.strength;
-      if (u.speed !== undefined) u.battlestats.speed = u.speed;
-      if (u.dexterity !== undefined) u.battlestats.dexterity = u.dexterity;
-      if (u.defense !== undefined) u.battlestats.defense = u.defense;
+    // --- Battle stats normalization ---
+    // V1: strength/speed/dexterity/defense as plain numbers at top level
+    // V2: nested under battlestats as {value: X} objects
+    if (!u.battlestats) u.battlestats = {};
+    const statNames = ['strength', 'speed', 'dexterity', 'defense'];
+    for (const name of statNames) {
+      // Priority 1: top-level plain number (V1 format)
+      const topVal = asStatNum(u[name]);
+      if (topVal !== undefined) { u.battlestats[name] = topVal; continue; }
+      // Priority 2: already under battlestats (V2 may have {value:X} objects)
+      const nested = asStatNum(u.battlestats[name]);
+      if (nested !== undefined) { u.battlestats[name] = nested; continue; }
+    }
+    // V2 may provide a total field
+    if (u.battlestats.total == null) {
+      const total = statNames.reduce((s, n) => {
+        const v = asStatNum(u.battlestats[n]);
+        return v !== undefined ? s + v : s;
+      }, 0);
+      if (total > 0) u.battlestats.total = total;
     }
 
-    // Money: API returns money_onhand at top level
-    if (u.money_onhand !== undefined || u.vault_amount !== undefined) {
-      if (!u.money) u.money = {};
-      if (u.money_onhand !== undefined) u.money.cash_on_hand = u.money_onhand;
-      if (u.vault_amount !== undefined) u.money.money_bank = u.vault_amount;
-    }
+    // --- Money normalization ---
+    // V1: money_onhand / vault_amount at top level
+    // V2: nested under money.wallet / money.cayman_bank
+    if (!isObject(u.money)) u.money = {};
+    if (u.money_onhand != null) u.money.cash_on_hand = Number(u.money_onhand);
+    else if (u.money.wallet != null) u.money.cash_on_hand = Number(u.money.wallet);
+    if (u.vault_amount != null) u.money.money_bank = Number(u.vault_amount);
+    else if (u.money.cayman_bank != null) u.money.money_bank = Number(u.money.cayman_bank);
 
+    // --- Diagnostic logging ---
     const eC = u.bars?.energy?.current;
     const eM = u.bars?.energy?.maximum;
-    addLog('Merge done — bars.energy: ' + (eC !== undefined ? eC + '/' + eM : 'MISSING') +
+    addLog('Merge done — bars.energy: ' + (eC != null ? eC + '/' + eM : 'MISSING') +
            ', strength: ' + (u.battlestats?.strength ?? 'n/a') +
            ', cash: ' + (u.money?.cash_on_hand ?? 'n/a'));
-    if (!u.bars?.energy) {
-      addLog('WARNING: bars.energy is ' + JSON.stringify(u.bars?.energy) + ', raw u.energy is ' + JSON.stringify(u.energy)?.substring(0, 100));
+    if (!u.bars?.energy || u.bars.energy.current == null) {
+      addLog('WARNING: bars.energy is ' + JSON.stringify(u.bars?.energy) +
+             ', raw u.energy is ' + JSON.stringify(u.energy)?.substring(0, 100) +
+             ', profile.energy is ' + JSON.stringify(u.profile?.energy)?.substring(0, 100));
     }
     STATE.lastSeen.user = nowTs();
     if (!STATE.ui.minimized) renderPanel();
@@ -1360,12 +1404,15 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
         const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
         if (url.includes('api.torn.com/')) {
           extractApiKeyFromUrl(url);
-          const clone = response.clone();
-          const contentType = clone.headers.get('content-type') || '';
-          if (contentType.includes('application/json') || contentType.includes('text/plain')) {
-            const text = await clone.text();
-            const data = safeJsonParse(text);
-            handleApiPayload(url, data);
+          // Skip our own calls (marked with _tpda=1) to avoid double-processing
+          if (!url.includes('_tpda=1')) {
+            const clone = response.clone();
+            const contentType = clone.headers.get('content-type') || '';
+            if (contentType.includes('application/json') || contentType.includes('text/plain')) {
+              const text = await clone.text();
+              const data = safeJsonParse(text);
+              handleApiPayload(url, data);
+            }
           }
         }
       } catch (_) {}
@@ -1392,6 +1439,8 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
         try {
           const url = String(this.__tpda_url || '');
           if (!url.includes('api.torn.com/')) return;
+          // Skip our own calls (marked with _tpda=1) to avoid double-processing
+          if (url.includes('_tpda=1')) return;
           const text = this.responseText;
           const data = safeJsonParse(text);
           handleApiPayload(url, data);
