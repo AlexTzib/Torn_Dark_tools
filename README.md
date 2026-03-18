@@ -138,6 +138,7 @@ All three scripts can run simultaneously. They use separate z-index bases and au
 
 ```
 Torn_Dark_tools/
+├── AGENTS.md                              ← Developer reference (architecture, PDA internals, policies)
 ├── README.md                              ← this file
 ├── urls                                   ← raw GitHub URLs for Torn PDA remote loading
 ├── torn-assistant.user.js                 ← AI Advisor bubble script
