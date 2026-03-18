@@ -172,23 +172,34 @@
 
   async function fetchDirectData() {
     if (!STATE.apiKey) return;
+    addLog('Fetching direct data...');
     try {
       const userUrl = `https://api.torn.com/user/?selections=bars,cooldowns,battlestats,stocks,money,profile&key=${encodeURIComponent(STATE.apiKey)}`;
       const userRes = await fetch(userUrl);
       const userData = await userRes.json();
       if (userData && !userData.error) {
+        addLog('User API response keys: ' + Object.keys(userData).join(', '));
         mergeUserData(userData);
+      } else if (userData?.error) {
+        addLog('User API error: ' + (userData.error.error || JSON.stringify(userData.error)));
       }
-    } catch {}
+    } catch (e) {
+      addLog('User fetch error: ' + (e.message || e));
+    }
 
     try {
       const factionUrl = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
       const factionRes = await fetch(factionUrl);
       const factionData = await factionRes.json();
       if (factionData && !factionData.error) {
+        addLog('Faction API response received');
         mergeFactionData(factionData);
+      } else if (factionData?.error) {
+        addLog('Faction API error: ' + (factionData.error.error || JSON.stringify(factionData.error)));
       }
-    } catch {}
+    } catch (e) {
+      addLog('Faction fetch error: ' + (e.message || e));
+    }
   }
 
   function getDefaultBubblePosition() {
@@ -250,11 +261,11 @@
 
   function getSelectionsPresent(data) {
     const keys = [];
-    if (data.bars) keys.push('bars');
+    if (data.bars || data.energy) keys.push('bars');
     if (data.cooldowns) keys.push('cooldowns');
-    if (data.battlestats) keys.push('battlestats');
+    if (data.battlestats || data.strength !== undefined) keys.push('battlestats');
     if (data.stocks) keys.push('stocks');
-    if (data.money) keys.push('money');
+    if (data.money || data.money_onhand !== undefined) keys.push('money');
     if (data.profile || data.basic || data.name) keys.push('profile/basic');
     return keys;
   }
@@ -1225,6 +1236,37 @@
 
   function mergeUserData(data) {
     STATE.userData = deepMerge(STATE.userData, data);
+
+    // Normalize: Torn API v1 returns bars/stats/money at top level, not nested.
+    // Build the wrapper objects the rendering code expects.
+    const u = STATE.userData;
+
+    // Bars: API returns energy/nerve/happy/life at top level
+    if (u.energy || u.nerve || u.happy || u.life) {
+      if (!u.bars) u.bars = {};
+      if (u.energy) u.bars.energy = u.energy;
+      if (u.nerve) u.bars.nerve = u.nerve;
+      if (u.happy) u.bars.happy = u.happy;
+      if (u.life) u.bars.life = u.life;
+    }
+
+    // Battle stats: API returns strength/speed/dexterity/defense at top level
+    if (u.strength !== undefined || u.speed !== undefined || u.dexterity !== undefined || u.defense !== undefined) {
+      if (!u.battlestats) u.battlestats = {};
+      if (u.strength !== undefined) u.battlestats.strength = u.strength;
+      if (u.speed !== undefined) u.battlestats.speed = u.speed;
+      if (u.dexterity !== undefined) u.battlestats.dexterity = u.dexterity;
+      if (u.defense !== undefined) u.battlestats.defense = u.defense;
+    }
+
+    // Money: API returns money_onhand at top level
+    if (u.money_onhand !== undefined || u.vault_amount !== undefined) {
+      if (!u.money) u.money = {};
+      if (u.money_onhand !== undefined) u.money.cash_on_hand = u.money_onhand;
+      if (u.vault_amount !== undefined) u.money.money_bank = u.vault_amount;
+    }
+
+    addLog('User data merged (energy: ' + (u.bars?.energy?.current ?? 'n/a') + '/' + (u.bars?.energy?.maximum ?? 'n/a') + ')');
     STATE.lastSeen.user = nowTs();
     if (!STATE.ui.minimized) renderPanel();
   }
