@@ -4,6 +4,115 @@ Research notes from analyzing popular open-source Torn City scripts and tools. T
 
 ---
 
+## Quick Lookup — "I need to build X, where do I look?"
+
+Use this table when starting a new feature. Find the closest functionality, then go read that repo's implementation.
+
+### Combat & War
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Ranked war target finder** | Xoke | `TornRankedWarTargetFinder.user.js` (1253 lines) | FF Scouter integration, chain monitoring (current/timeout/cooldown), target filtering |
+| **Retal monitor** (who attacked us & wasn't retaliated) | Xoke | `TornRetalMonitor.user.js` (~869 lines) | Polls `faction/{id}?selections=attacks`, 5-min window countdown, notification sounds, badge count |
+| **Target tracking / management** | Xoke | `TornTargetManager.user.js` | Persistent target list with notes |
+| **Stats estimation / FF score** | TornTools | `scripts/features/stats-estimate/`, `scripts/features/ff-scouter/` | Fair fight gauge, attacker/defender stat comparison |
+| **War finish time prediction** | TornTools | `scripts/features/ranked-war-filter/` | Estimates when a ranked war will end |
+| **Chain watch alert** | External (linked by Xoke) | [greasyfork #478422](https://greasyfork.org/en/scripts/478422) | Screen fades red when chain timer drops below threshold |
+| **Ranked war timer overlay** | russianrob | `torn-ranked-war-timer.user.js` | Simple timer display for ranked wars |
+| **Low-level attack detector** | kek91 | `LowLvlAttackDetector.user.js` | Detects incoming attacks from lower-level players during an ongoing attack |
+| **Fight button on profiles** | paulwratt | `fightclub.torn.user.js` | Adds fight button to Friends/Black list profiles |
+
+### Energy, Drugs & Healing
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Xanax reminder** (no drug CD banner) | Xoke | `TornXanaxReminder.user.js` | Checks `[aria-label^='Drug Cooldown:']`, shows clickable red bar |
+| **Heal advisor** (best item for hospital time) | Xoke | `TornHealAdvisor.user.js` (333 lines) | Picks highest-cooldown item whose CD expires before discharge |
+| **Drug details / effects** | TornTools | `scripts/features/drug-details/` | Shows drug stat effects inline |
+| **Cooldown end times** | TornTools | `scripts/features/travel-cooldowns/ttTravelCooldowns.ts` | Absolute timestamp approach, accesses `userdata.energy.fulltime`, `userdata.cooldowns.*` |
+| **Bar links** | TornTools | `scripts/features/bar-links/` | Clickable energy/nerve bars |
+
+### Economy & Trading
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Auto bazaar pricing** (set price from market) | danielgoodwin97 | `auto-bazaar-pricer.user.js` (677 lines) | Uses `Authorization: ApiKey` header (v2), virtual scroll handling, config popup UI |
+| **Bazaar filler** (auto-fill prices) | External (linked by Xoke) | [greasyfork #473470](https://greasyfork.org/en/scripts/473470) | Auto-fills with lowest market price minus offset |
+| **Highlight cheap items** on market | TornTools | `scripts/features/highlight-cheap-items/` | Highlights items below a threshold |
+| **Item market fill max** | TornTools | `scripts/features/item-market-fill-max/` | Fill max quantity button |
+| **Bazaar worth calculator** | TornTools | `scripts/features/bazaar-worth/` | Total value of bazaar items |
+| **Item values display** | TornTools | `scripts/features/item-values/` | Show market value inline |
+| **RW weapon/armour pricing** | russianrob | `torn-rw-pricer.user.js` (v2.9.9), `torn-rw-weapon-pricer.user.js` | Auction data with p25/median/p75 percentiles from 227K+ sales |
+| **Auction price checker** | External (linked by Xoke) | [greasyfork #564049](https://greasyfork.org/en/scripts/564049) | Historical auction pricing |
+| **Stock market helper** | sid-the-sloth1 | `stonks.user.js` | Stock tracking and analysis |
+
+### Faction Management
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Faction member CSV export** | Xoke | `TornFactionCSVExporter.user.js` (239 lines) | Includes battle stats from FF Scouter, CSV injection sanitization |
+| **Offline member highlighting** | russianrob | `torn-faction-offline-highlight.user.js` | Highlights members offline >24h, OC inactivity badges in chat. PDA compatible. |
+| **Faction member filters** | TornTools | `scripts/features/faction-member-filter/` | Filter/sort faction members |
+| **Armory worth** | TornTools | `scripts/features/armory-worth/` | Total faction armory value |
+| **Faction stakeouts** | TornTools | `scripts/features/faction-stakeouts/` | Monitor specific faction members |
+| **Vault overpayment warning** | Xoke | `TornVaultCatcher.user.js` | Warns bankers when giving more than vault balance |
+
+### Organized Crime (OC)
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **OC slot recommender** | Xoke | `TornOCRecommender.user.js` (428 lines) | Success rate thresholds: Level 2-6 = 70%+, Level 7+ = 50%+ |
+| **OC success rate highlighter** | Xoke | `TornOCSuccessHighlighter.user.js` | Highlights <70% success participants |
+| **OC 2.0 missing items** | russianrob | `torn-oc-2-0-missing-item-roles.user.js` | Floating box showing planning crimes with missing-item roles |
+| **OC loan manager** | russianrob | `torn-oc-loan-manager-pda.user.js` | Over-loan highlights, loan helper, split calculator. PDA compatible. |
+| **OC time / OC2 time** | TornTools | `scripts/features/oc-time/`, `scripts/features/oc2-time/` | OC countdown timers |
+| **OC available players** | TornTools | `scripts/features/oc-available-players/` | Shows who's available for OC |
+| **OC 2.0 Helper** | External (linked by Xoke) | [greasyfork #522974](https://greasyfork.org/en/scripts/522974) | Overview: members not in crimes, issues |
+
+### Profile & Player Info
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Profile link formatter** (copy formatted links) | russianrob | `torn-profile-link-formatter.user.js` | BSP prediction, FF Scouter V2 integration, dedupes by ID |
+| **Profile box** (spy data, stat comparison) | TornTools | `scripts/features/profile-box/ttProfileBox.ts` | Shows your stats vs target: `userdata.battlestats.strength.value` |
+| **Hospital filter** | TornTools | `scripts/features/hospital-filter/` | Filter hospital list with alias support |
+| **Bounty filter** | TornTools | `scripts/features/bounty-filter/` | Filter bounty list |
+
+### UI, Navigation & Misc
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Dark theme** | paulwratt | `darktheme.torn.user.js`, `darktheme.stylish.css` | 77% light reduction, minimal CSS. Not full black. |
+| **Custom links in sidebar** | TornTools | `scripts/features/custom-links/` | User-defined sidebar links |
+| **Sidebar notes** | TornTools | `scripts/features/sidebar-notes/` | Personal notes in sidebar |
+| **Fancy navigation** | kek91 | `FancyNavigation.user.js` | Navigation enhancements |
+| **NPC loot times** | TornTools | `scripts/features/npc-loot-times/` | Countdown to NPC loot availability |
+| **Education finish time** | TornTools | `scripts/features/education-finish-time/` | Shows when current education completes |
+| **Christmas Town helper** | sid-the-sloth1 | `Christmas Town.user.js` / `cthelper-pda.user.js` | Highlights items/chests/NPCs in seasonal event. PDA version available. |
+
+### Crimes
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **Crime morale / Crime 2.0** | External (linked by Xoke) | [greasyfork #515557](https://greasyfork.org/en/scripts/515557) | Scamming, pickpocketing, burglary helper |
+| **OutcomeDB** (crime data capture) | External (linked by Xoke) | [greasyfork #489750](https://greasyfork.org/en/scripts/489750) | Captures crime outcome, skill gain, target data |
+| **Express crimes** | tcbasic | `tcexpresscrimes.user.js` | Historical — express crime execution (2008) |
+| **Express bust** | tcbasic | `tcexpressbust.user.js` | Historical — express bust from jail (2007) |
+
+### Infrastructure / Patterns (not features, but reusable code)
+
+| Functionality | Repo / Script | Key File(s) | Notes |
+|---|---|---|---|
+| **DOM element polling** (`requireElement`) | TornTools | `scripts/global/functions/requires.ts` | Promise-based, 50ms interval, 1000 max cycles. **Copy this.** |
+| **Feature lifecycle manager** | TornTools | `scripts/global/featureManager.ts` | Register/init/execute/cleanup per feature |
+| **Event bus / custom events** | TornTools | `scripts/global/functions/listeners.ts` | Decouple DOM detection from feature logic |
+| **Fetch interception (page context)** | TornTools | `scripts/global/inject/fetch.ts` | Injected via `<script>` tag, dispatches window events |
+| **Reusable Torn JS object** | paulwratt | `tc.torn.js` | Generic Torn City helper object (experimental) |
+| **TypeScript userscript build** | kek91 | `package.json`, `kvassh.ts` | `npm run build` → compiled `.user.js` in `dist/` |
+| **Discord bot (server-side API)** | equibot | `commands/spy.js`, `commands/stats.js`, `commands/stocks.js` | Server-side Torn API usage for bots |
+
+---
+
 ## Tier 1 — Gold-Standard References
 
 ### TornTools Extension
