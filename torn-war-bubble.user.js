@@ -493,7 +493,7 @@
   }
 
   function extractApiKeyFromUrl(url) {
-    if (STATE.apiKeySource === 'manual') return; // manual key takes priority
+    if (STATE.apiKeySource === 'manual' || STATE.apiKeySource === 'pda') return;
     try {
       const u = new URL(url, location.origin);
       const key = u.searchParams.get('key');

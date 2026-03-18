@@ -159,13 +159,14 @@
   }
 
   function extractApiKeyFromUrl(url) {
-    if (STATE.apiKeySource === 'manual') return;
+    if (STATE.apiKeySource === 'manual' || STATE.apiKeySource === 'pda') return;
     try {
       const u = new URL(url, location.origin);
       const key = u.searchParams.get('key');
       if (key && key.length >= 16) {
         STATE.apiKey = key;
         STATE.apiKeySource = 'intercepted';
+        addLog('API key captured from network traffic');
       }
     } catch {}
   }
@@ -1214,6 +1215,19 @@
         <div style="font-weight:bold;margin-bottom:8px;">Advice</div>
         ${advice.map(x => `<div style="margin-bottom:8px;">• ${escapeHtml(x)}</div>`).join('')}
       </div>
+
+      <div style="margin-top:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#0f1116;">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="tpda-ai-log-toggle">
+          <div style="font-weight:bold;font-size:12px;">Debug Log (${STATE._logs.length})</div>
+          <div style="display:flex;gap:6px;">
+            <button id="tpda-ai-log-copy" style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy Log</button>
+            <span style="font-size:11px;color:#bbb;">tap to toggle</span>
+          </div>
+        </div>
+        <div id="tpda-ai-log-body" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;font-size:11px;color:#aaa;font-family:monospace;white-space:pre-wrap;word-break:break-all;">
+${STATE._logs.map(l => escapeHtml(l)).join('\n')}
+        </div>
+      </div>
     `;
 
     const saveKeyBtn = document.getElementById('tpda-ai-save-key');
@@ -1228,8 +1242,29 @@
         } else {
           STATE.apiKeySource = '';
         }
+        addLog('Manual API key saved');
         await fetchDirectData();
         renderPanel();
+      };
+    }
+
+    const logToggle = document.getElementById('tpda-ai-log-toggle');
+    if (logToggle) {
+      logToggle.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const logBody = document.getElementById('tpda-ai-log-body');
+        if (logBody) logBody.style.display = logBody.style.display === 'none' ? 'block' : 'none';
+      };
+    }
+
+    const logCopyBtn = document.getElementById('tpda-ai-log-copy');
+    if (logCopyBtn) {
+      logCopyBtn.onclick = () => {
+        const text = STATE._logs.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+          logCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { logCopyBtn.textContent = 'Copy Log'; }, 1200);
+        }).catch(() => {});
       };
     }
   }
