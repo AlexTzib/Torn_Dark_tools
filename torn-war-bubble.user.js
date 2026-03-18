@@ -16,7 +16,14 @@
   const PANEL_ID = 'tpda-war-online-panel';
   const HEADER_ID = 'tpda-war-online-header';
   const BUBBLE_SIZE = 56;
-  const POLL_MS = 60000;
+  const POLL_INTERVALS = [
+    { label: '30s',  ms: 30000 },
+    { label: '1 min', ms: 60000 },
+    { label: '2 min', ms: 120000 },
+    { label: '5 min', ms: 300000 },
+    { label: '10 min', ms: 600000 }
+  ];
+  const DEFAULT_POLL_MS = 60000;
   const TIMER_TRACK_KEY = `${SCRIPT_KEY}_timer_track`;
 
   const TIMER_TRACK_MAX_ENTRIES = 500;
@@ -30,6 +37,8 @@
     enemyMembers: [],
     lastFetchTs: 0,
     lastError: '',
+    pollMs: loadPollMs(),
+    pollTimerId: null,
     timerTrack: loadTimerTrack(),
     ui: {
       minimized: true,
@@ -99,6 +108,16 @@
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch {}
+  }
+
+  function loadPollMs() {
+    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, DEFAULT_POLL_MS);
+    const valid = POLL_INTERVALS.find(p => p.ms === saved);
+    return valid ? saved : DEFAULT_POLL_MS;
+  }
+
+  function savePollMs(ms) {
+    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
   }
 
   function loadTimerTrack() {
@@ -959,6 +978,17 @@
         </div>
       </div>
 
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="font-weight:bold;margin-bottom:6px;">Refresh rate</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="tpda-war-poll-select"
+                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;font-size:13px;">
+            ${POLL_INTERVALS.map(p => `<option value="${p.ms}"${p.ms === STATE.pollMs ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+          </select>
+          <span style="font-size:11px;color:#bbb;">Auto-refresh while panel is open</span>
+        </div>
+      </div>
+
       ${STATE.lastError ? `
         <div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">
           ${escapeHtml(STATE.lastError)}
@@ -1029,6 +1059,16 @@
         renderPanel();
       };
     }
+
+    const pollSelect = document.getElementById('tpda-war-poll-select');
+    if (pollSelect) {
+      pollSelect.onchange = () => {
+        const ms = Number(pollSelect.value);
+        STATE.pollMs = ms;
+        savePollMs(ms);
+        restartPolling();
+      };
+    }
   }
 
   function onResize() {
@@ -1059,12 +1099,17 @@
   }
 
   function startPolling() {
-    setInterval(async () => {
+    if (STATE.pollTimerId) clearInterval(STATE.pollTimerId);
+    STATE.pollTimerId = setInterval(async () => {
       if (STATE.ui.minimized) return;
       if (!STATE.enemyFactionId || !STATE.apiKey) return;
       await refreshEnemyFactionData();
       renderPanel();
-    }, POLL_MS);
+    }, STATE.pollMs);
+  }
+
+  function restartPolling() {
+    startPolling();
   }
 
   function init() {
