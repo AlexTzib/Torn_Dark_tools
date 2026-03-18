@@ -11,6 +11,10 @@
 (function () {
   'use strict';
 
+  // Torn PDA replaces this placeholder with the real API key at injection time.
+  // Outside PDA (e.g. Tampermonkey) it stays as the literal placeholder string.
+  const PDA_INJECTED_KEY = '###PDA-APIKEY###';
+
   const SCRIPT_KEY = 'tpda_war_online_location_timers_bubble_v3';
   const BUBBLE_ID = 'tpda-war-online-bubble';
   const PANEL_ID = 'tpda-war-online-panel';
@@ -1008,8 +1012,9 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="font-weight:bold;margin-bottom:6px;">API key</div>
         <div style="font-size:11px;color:#bbb;margin-bottom:6px;">
-          Preferred: paste your key below. It is stored in localStorage only.<br>
-          Fallback: the script can detect the key from Torn PDA network traffic (read-only, memory-only, never sent externally).
+          ${STATE.apiKeySource === 'pda'
+            ? 'Using Torn PDA key automatically. Manual entry below is optional (overrides PDA key).'
+            : 'In Torn PDA the key is loaded automatically. Outside PDA, paste your key below.'}
         </div>
         <div style="display:flex;gap:8px;">
           <input id="tpda-war-api-key-input" type="password" value="${escapeHtml(getManualApiKey())}" placeholder="Your Torn API key"
@@ -1078,6 +1083,19 @@
         <div style="font-weight:bold;margin-bottom:6px;">Unknown / other (${formatNumber(groups.unknown.length)})</div>
         ${renderMemberList(groups.unknown, 'war-unknown')}
       </div>
+
+      <div style="margin-top:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#0f1116;">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="tpda-war-log-toggle">
+          <div style="font-weight:bold;font-size:12px;">Debug Log (${STATE._logs.length})</div>
+          <div style="display:flex;gap:6px;">
+            <button id="tpda-war-log-copy" style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy Log</button>
+            <span style="font-size:11px;color:#bbb;">tap to toggle</span>
+          </div>
+        </div>
+        <div id="tpda-war-log-body" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;font-size:11px;color:#aaa;font-family:monospace;white-space:pre-wrap;word-break:break-all;">
+${STATE._logs.map(l => escapeHtml(l)).join('\n')}
+        </div>
+      </div>
     `;
 
     const saveKeyBtn = document.getElementById('tpda-war-save-key');
@@ -1131,6 +1149,26 @@
         if (text) copyToClipboard(text, btn);
       });
     }
+
+    const logToggle = document.getElementById('tpda-war-log-toggle');
+    if (logToggle) {
+      logToggle.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const logBody = document.getElementById('tpda-war-log-body');
+        if (logBody) logBody.style.display = logBody.style.display === 'none' ? 'block' : 'none';
+      };
+    }
+
+    const logCopyBtn = document.getElementById('tpda-war-log-copy');
+    if (logCopyBtn) {
+      logCopyBtn.onclick = () => {
+        const text = STATE._logs.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+          logCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { logCopyBtn.textContent = 'Copy Log'; }, 1200);
+        }).catch(() => {});
+      };
+    }
   }
 
   function onResize() {
@@ -1176,12 +1214,24 @@
   }
 
   function init() {
-    // Load manually saved API key if available
-    const savedKey = getManualApiKey();
-    if (savedKey) {
-      STATE.apiKey = savedKey;
-      STATE.apiKeySource = 'manual';
+    // Priority 1: PDA-injected key (automatic, zero config)
+    if (PDA_INJECTED_KEY.length >= 16 && !PDA_INJECTED_KEY.includes('#')) {
+      STATE.apiKey = PDA_INJECTED_KEY;
+      STATE.apiKeySource = 'pda';
+      addLog('API key loaded from Torn PDA');
     }
+
+    // Priority 2: manually saved key
+    if (!STATE.apiKey) {
+      const savedKey = getManualApiKey();
+      if (savedKey) {
+        STATE.apiKey = savedKey;
+        STATE.apiKeySource = 'manual';
+        addLog('API key loaded from manual entry');
+      }
+    }
+
+    // Priority 3: network interception (hookFetch/hookXHR) fills it in later
 
     ensureStyles();
     hookFetch();
@@ -1192,7 +1242,7 @@
     window.addEventListener('resize', onResize);
     startPolling();
     console.log('[War Online Bubble - Location + Timers] Started.');
-    addLog('War Bubble initialized');
+    addLog('War Bubble initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
   }
 
   setTimeout(init, 1200);

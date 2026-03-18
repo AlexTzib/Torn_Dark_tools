@@ -11,6 +11,10 @@
 (function () {
   'use strict';
 
+  // Torn PDA replaces this placeholder with the real API key at injection time.
+  // Outside PDA (e.g. Tampermonkey) it stays as the literal placeholder string.
+  const PDA_INJECTED_KEY = '###PDA-APIKEY###';
+
   const SCRIPT_KEY = 'tpda_safe_ai_bubble_v3';
   const BUBBLE_ID = 'tpda-safe-ai-bubble';
   const PANEL_ID = 'tpda-safe-ai-panel';
@@ -1151,7 +1155,9 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="font-weight:bold;margin-bottom:6px;">API Key</div>
         <div style="font-size:11px;color:#bbb;margin-bottom:6px;">
-          Enter your key for direct data fetching. Stored in localStorage only.
+          ${STATE.apiKeySource === 'pda'
+            ? 'Using Torn PDA key automatically. Manual entry below is optional (overrides PDA key).'
+            : 'Enter your key for direct data fetching. In Torn PDA this is automatic.'}
         </div>
         <div style="display:flex;gap:8px;">
           <input id="tpda-ai-api-key-input" type="password" value="${escapeHtml(getManualApiKey())}" placeholder="Your Torn API key"
@@ -1325,11 +1331,25 @@
   }
 
   function init() {
-    const savedKey = getManualApiKey();
-    if (savedKey) {
-      STATE.apiKey = savedKey;
-      STATE.apiKeySource = 'manual';
+    // Priority 1: PDA-injected key (automatic, zero config)
+    if (PDA_INJECTED_KEY.length >= 16 && !PDA_INJECTED_KEY.includes('#')) {
+      STATE.apiKey = PDA_INJECTED_KEY;
+      STATE.apiKeySource = 'pda';
+      addLog('API key loaded from Torn PDA');
     }
+
+    // Priority 2: manually saved key
+    if (!STATE.apiKey) {
+      const savedKey = getManualApiKey();
+      if (savedKey) {
+        STATE.apiKey = savedKey;
+        STATE.apiKeySource = 'manual';
+        addLog('API key loaded from manual entry');
+      }
+    }
+
+    // Priority 3: network interception (hookFetch/hookXHR) fills it in later
+    addLog('AI Advisor initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
 
     ensureStyles();
     hookFetch();
@@ -1337,6 +1357,9 @@
     createBubble();
     createPanel();
     window.addEventListener('resize', onResize);
+
+    if (STATE.apiKey) fetchDirectData();
+
     console.log('[Torn AI Assistant] Bubble mode started.');
   }
 

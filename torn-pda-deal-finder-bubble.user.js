@@ -697,6 +697,7 @@
     if (pageMarketValue > 0) cache.marketValue = pageMarketValue;
 
     saveCache();
+    addLog('Cache updated: ' + itemKey + ' (' + context + ' floor: $' + (floor || 'n/a') + ')');
   }
 
   function calcNetAfterTax(gross) {
@@ -887,7 +888,42 @@
       `;
     }
 
-    body.innerHTML = headerInfo + itemInfo + noteBox + dealsHtml;
+    const logHtml = `
+      <div style="margin-top:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#0f1116;">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="tpda-deal-log-toggle">
+          <div style="font-weight:bold;font-size:12px;">Debug Log (${STATE._logs.length})</div>
+          <div style="display:flex;gap:6px;">
+            <button id="tpda-deal-log-copy" style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy Log</button>
+            <span style="font-size:11px;color:#bbb;">tap to toggle</span>
+          </div>
+        </div>
+        <div id="tpda-deal-log-body" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;font-size:11px;color:#aaa;font-family:monospace;white-space:pre-wrap;word-break:break-all;">
+${STATE._logs.map(l => escapeHtml(l)).join('\n')}
+        </div>
+      </div>
+    `;
+
+    body.innerHTML = headerInfo + itemInfo + noteBox + dealsHtml + logHtml;
+
+    const logToggle = document.getElementById('tpda-deal-log-toggle');
+    if (logToggle) {
+      logToggle.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const logBody = document.getElementById('tpda-deal-log-body');
+        if (logBody) logBody.style.display = logBody.style.display === 'none' ? 'block' : 'none';
+      };
+    }
+
+    const logCopyBtn = document.getElementById('tpda-deal-log-copy');
+    if (logCopyBtn) {
+      logCopyBtn.onclick = () => {
+        const text = STATE._logs.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+          logCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { logCopyBtn.textContent = 'Copy Log'; }, 1200);
+        }).catch(() => {});
+      };
+    }
   }
 
   function onResize() {
@@ -924,6 +960,7 @@
     createBubble();
     createPanel();
     window.addEventListener('resize', onResize);
+    addLog('Deal Finder initialized');
     console.log('[Deal Finder Bubble] Started.');
   }
 
