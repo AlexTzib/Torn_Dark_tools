@@ -19,8 +19,12 @@
   const POLL_MS = 60000;
   const TIMER_TRACK_KEY = `${SCRIPT_KEY}_timer_track`;
 
+  const TIMER_TRACK_MAX_ENTRIES = 500;
+  const TIMER_TRACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
   const STATE = {
-    apiKey: null, // memory only
+    apiKey: null, // memory only — never persisted to storage
+    apiKeySource: '', // 'manual' | 'intercepted'
     enemyFactionId: null,
     enemyFactionName: '',
     enemyMembers: [],
@@ -102,7 +106,22 @@
   }
 
   function saveTimerTrack() {
+    pruneTimerTrack();
     setStorage(TIMER_TRACK_KEY, STATE.timerTrack);
+  }
+
+  function pruneTimerTrack() {
+    const entries = Object.entries(STATE.timerTrack);
+    if (entries.length <= TIMER_TRACK_MAX_ENTRIES) return;
+
+    const now = nowTs();
+    const pruned = {};
+    for (const [key, val] of entries) {
+      if (val && typeof val.seenAt === 'number' && (now - val.seenAt) < TIMER_TRACK_MAX_AGE_MS) {
+        pruned[key] = val;
+      }
+    }
+    STATE.timerTrack = pruned;
   }
 
   function getDefaultBubblePosition() {
@@ -435,12 +454,22 @@
     handle.addEventListener('pointercancel', finish);
   }
 
+  function getManualApiKey() {
+    return getStorage(`${SCRIPT_KEY}_api_key`, '');
+  }
+
+  function setManualApiKey(key) {
+    setStorage(`${SCRIPT_KEY}_api_key`, key || '');
+  }
+
   function extractApiKeyFromUrl(url) {
+    if (STATE.apiKeySource === 'manual') return; // manual key takes priority
     try {
       const u = new URL(url, location.origin);
       const key = u.searchParams.get('key');
       if (key && key.length >= 16) {
         STATE.apiKey = key;
+        STATE.apiKeySource = 'intercepted';
       }
     } catch {}
   }
@@ -904,8 +933,21 @@
         <div style="font-weight:bold;margin-bottom:6px;">Target</div>
         <div>Enemy faction: ${escapeHtml(STATE.enemyFactionName || 'Unknown')}</div>
         <div>Faction ID: ${escapeHtml(STATE.enemyFactionId || 'Not set')}</div>
-        <div>API key captured: ${STATE.apiKey ? 'Yes' : 'No'}</div>
+        <div>API key: ${STATE.apiKey ? `Active (${escapeHtml(STATE.apiKeySource || 'unknown source')})` : 'Not available'}</div>
         <div>Last refresh: ${ageText(STATE.lastFetchTs)}</div>
+      </div>
+
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="font-weight:bold;margin-bottom:6px;">API key</div>
+        <div style="font-size:11px;color:#bbb;margin-bottom:6px;">
+          Preferred: paste your key below. It is stored in localStorage only.<br>
+          Fallback: the script can detect the key from Torn PDA network traffic (read-only, memory-only, never sent externally).
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input id="tpda-war-api-key-input" type="password" value="${escapeHtml(getManualApiKey())}" placeholder="Your Torn API key"
+                 style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
+          <button id="tpda-war-save-key" style="background:#444;color:white;border:none;border-radius:8px;padding:8px 10px;">Save</button>
+        </div>
       </div>
 
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
@@ -959,6 +1001,23 @@
       </div>
     `;
 
+    const saveKeyBtn = document.getElementById('tpda-war-save-key');
+    if (saveKeyBtn) {
+      saveKeyBtn.onclick = async () => {
+        const input = document.getElementById('tpda-war-api-key-input');
+        const val = String(input?.value || '').trim();
+        setManualApiKey(val);
+        if (val) {
+          STATE.apiKey = val;
+          STATE.apiKeySource = 'manual';
+        } else {
+          STATE.apiKeySource = '';
+        }
+        await refreshEnemyFactionData();
+        renderPanel();
+      };
+    }
+
     const saveBtn = document.getElementById('tpda-war-save-id');
     if (saveBtn) {
       saveBtn.onclick = async () => {
@@ -1009,6 +1068,13 @@
   }
 
   function init() {
+    // Load manually saved API key if available
+    const savedKey = getManualApiKey();
+    if (savedKey) {
+      STATE.apiKey = savedKey;
+      STATE.apiKeySource = 'manual';
+    }
+
     ensureStyles();
     hookFetch();
     hookXHR();

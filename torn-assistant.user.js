@@ -594,8 +594,8 @@
   }
 
   function makeDraggableBubble(el) {
-    let startX = 0;
-    let startY = 0;
+    let startX = null;
+    let startY = null;
     let originLeft = 0;
     let originTop = 0;
     let dragging = false;

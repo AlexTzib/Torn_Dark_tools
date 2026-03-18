@@ -18,6 +18,8 @@
 
   const ITEM_MARKET_TAX = 0.05; // standard sales tax
   const BUBBLE_SIZE = 56;
+  const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const CACHE_MAX_ITEMS = 200;
 
   const STATE = {
     userData: {},
@@ -109,8 +111,26 @@
 
   function saveCache() {
     try {
+      pruneCache();
       localStorage.setItem(`${SCRIPT_KEY}_cache`, JSON.stringify(STATE.cache));
     } catch {}
+  }
+
+  function pruneCache() {
+    const entries = Object.entries(STATE.cache.items);
+    if (entries.length <= CACHE_MAX_ITEMS) return;
+
+    const now = nowTs();
+    const pruned = {};
+    const fresh = entries
+      .filter(([, v]) => v && typeof v.lastSeen === 'number' && (now - v.lastSeen) < CACHE_MAX_AGE_MS)
+      .sort((a, b) => (b[1].lastSeen || 0) - (a[1].lastSeen || 0))
+      .slice(0, CACHE_MAX_ITEMS);
+
+    for (const [key, val] of fresh) {
+      pruned[key] = val;
+    }
+    STATE.cache.items = pruned;
   }
 
   function getStorage(key, fallback) {
@@ -565,7 +585,32 @@
     const rows = [];
     const seen = new Set();
 
-    const candidateRows = Array.from(document.querySelectorAll('li, tr, div'));
+    // Target likely listing containers rather than every element on the page
+    const selectors = [
+      '.items-list li',
+      '.item-market-list li',
+      '.bazaar-list li',
+      '[class*="itemList"] li',
+      '[class*="item-list"] li',
+      '[class*="listing"] li',
+      '[class*="market"] li',
+      '[class*="bazaar"] li',
+      'ul.items li',
+      '.ReactVirtualized__Grid__innerScrollContainer > div'
+    ];
+
+    let candidateRows = [];
+    for (const sel of selectors) {
+      const found = document.querySelectorAll(sel);
+      if (found.length) {
+        candidateRows.push(...found);
+      }
+    }
+
+    // Fallback: broader scan if targeted selectors found nothing
+    if (!candidateRows.length) {
+      candidateRows = Array.from(document.querySelectorAll('li, tr, div'));
+    }
     for (const row of candidateRows) {
       const text = (row.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text) continue;
