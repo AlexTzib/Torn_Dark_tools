@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.0.0
+// @version      3.1.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -45,7 +45,9 @@
     lastError: '',
     pollMs: loadPollMs(),
     pollTimerId: null,
+    timerTickId: null,
     timerTrack: loadTimerTrack(),
+    collapsed: loadCollapsedState(),
     ui: {
       minimized: true,
       zIndexBase: 999970
@@ -85,6 +87,21 @@
     if (h) parts.push(`${h}h`);
     if (m) parts.push(`${m}m`);
     if (!d && !h) parts.push(`${s}s`);
+    return parts.join(' ');
+  }
+
+  function formatTimerFull(sec) {
+    sec = Number(sec || 0);
+    if (!Number.isFinite(sec) || sec <= 0) return 'now';
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const parts = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (m) parts.push(`${m}m`);
+    parts.push(`${s}s`);
     return parts.join(' ');
   }
 
@@ -154,6 +171,14 @@
       }
     }
     STATE.timerTrack = pruned;
+  }
+
+  function loadCollapsedState() {
+    return getStorage(`${SCRIPT_KEY}_collapsed`, {});
+  }
+
+  function saveCollapsedState() {
+    setStorage(`${SCRIPT_KEY}_collapsed`, STATE.collapsed);
   }
 
   function getDefaultBubblePosition() {
@@ -1021,6 +1046,7 @@
           locationBucket: location.bucket,
           locationLabel: location.label,
           timerRemainingSec: timer.remainingSec,
+          timerEndTs: timer.remainingSec != null ? nowUnix() + timer.remainingSec : null,
           timerSource: timer.source,
           fasterThanExpected: timerCheck.fasterThanExpected,
           timerDeltaSec: timerCheck.deltaSec,
@@ -1052,7 +1078,8 @@
       recentAway: [],
       hospital: [],
       jail: [],
-      unknown: []
+      shortOffline: [],
+      longOffline: []
     };
 
     for (const m of STATE.enemyMembers) {
@@ -1070,25 +1097,45 @@
 
       if (m.isOnline) {
         if (away) groups.onlineAway.push(m);
-        else groups.onlineTorn.push(m); // torn + unknown online → treat as in Torn
+        else groups.onlineTorn.push(m);
         continue;
       }
 
       if (m.minutes <= 60) {
         if (away) groups.recentAway.push(m);
-        else groups.recentTorn.push(m); // torn + unknown recent → treat as in Torn
+        else groups.recentTorn.push(m);
         continue;
       }
 
-      groups.unknown.push(m);
+      if (m.minutes <= 1440) {
+        groups.shortOffline.push(m);
+      } else {
+        groups.longOffline.push(m);
+      }
     }
 
     return groups;
   }
 
-  function timerText(member) {
+  function timerHtml(member) {
     if (member.timerRemainingSec == null) return 'Time left: unknown';
+    const bucket = member.locationBucket;
+    const showFull = bucket === 'hospital' || bucket === 'jail' || bucket === 'traveling';
+    if (showFull && member.timerEndTs) {
+      const remaining = Math.max(0, member.timerEndTs - nowUnix());
+      return `<span class="tpda-war-timer" data-end="${member.timerEndTs}">Time left: ${formatTimerFull(remaining)}</span>`;
+    }
     return `Time left: ${formatSeconds(member.timerRemainingSec)}`;
+  }
+
+  function tickTimers() {
+    const now = nowUnix();
+    document.querySelectorAll('.tpda-war-timer[data-end]').forEach(el => {
+      const end = Number(el.dataset.end);
+      if (!end) return;
+      const remaining = Math.max(0, end - now);
+      el.textContent = 'Time left: ' + formatTimerFull(remaining);
+    });
   }
 
   function verifyText(member) {
@@ -1130,7 +1177,7 @@
           <div style="font-size:12px;color:#bbb;">
             ${m.isOnline ? 'Online now' : `Last action: ${escapeHtml(m.relative || `${m.minutes}m`)}`} • ${escapeHtml(m.locationLabel)}
           </div>
-          <div style="font-size:12px;color:#bbb;">${escapeHtml(timerText(m))}</div>
+          <div style="font-size:12px;color:#bbb;">${timerHtml(m)}</div>
           ${verifyText(m)}
           <div style="margin-top:4px;display:flex;gap:6px;">
             <button class="tpda-war-copy-btn" data-copy="${escapeHtml(atkUrl)}"
@@ -1149,6 +1196,19 @@
         </div>
       `;
     }).join('');
+  }
+
+  function renderSection(key, title, list, cls) {
+    const collapsed = STATE.collapsed[key] || false;
+    const arrow = collapsed ? '\u25B6' : '\u25BC';
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div class="tpda-war-section-toggle" data-section="${key}" style="font-weight:bold;cursor:pointer;user-select:none;">
+          ${arrow} ${title} (${formatNumber(list.length)})
+        </div>
+        ${collapsed ? '' : `<div style="margin-top:6px;">${renderMemberList(list, cls)}</div>`}
+      </div>
+    `;
   }
 
   function renderPanel() {
@@ -1218,40 +1278,14 @@
         </div>
       ` : ''}
 
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Online in Torn (${formatNumber(groups.onlineTorn.length)})</div>
-        ${renderMemberList(groups.onlineTorn, 'war-on')}
-      </div>
-
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Online abroad / in flight (${formatNumber(groups.onlineAway.length)})</div>
-        ${renderMemberList(groups.onlineAway, 'war-abroad')}
-      </div>
-
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Recently active in Torn (${formatNumber(groups.recentTorn.length)})</div>
-        ${renderMemberList(groups.recentTorn, 'war-recent')}
-      </div>
-
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Recently active abroad / in flight (${formatNumber(groups.recentAway.length)})</div>
-        ${renderMemberList(groups.recentAway, 'war-abroad')}
-      </div>
-
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Hospital (${formatNumber(groups.hospital.length)})</div>
-        ${renderMemberList(groups.hospital, 'war-bad')}
-      </div>
-
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Jail (${formatNumber(groups.jail.length)})</div>
-        ${renderMemberList(groups.jail, 'war-bad')}
-      </div>
-
-      <div style="padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Unknown / other (${formatNumber(groups.unknown.length)})</div>
-        ${renderMemberList(groups.unknown, 'war-unknown')}
-      </div>
+      ${renderSection('onlineTorn', 'Online in Torn', groups.onlineTorn, 'war-on')}
+      ${renderSection('onlineAway', 'Online abroad / in flight', groups.onlineAway, 'war-abroad')}
+      ${renderSection('recentTorn', 'Recently active in Torn', groups.recentTorn, 'war-recent')}
+      ${renderSection('recentAway', 'Recently active abroad / in flight', groups.recentAway, 'war-abroad')}
+      ${renderSection('hospital', 'Hospital', groups.hospital, 'war-bad')}
+      ${renderSection('jail', 'Jail', groups.jail, 'war-bad')}
+      ${renderSection('shortOffline', 'Offline 1\u201324h', groups.shortOffline, 'war-muted')}
+      ${renderSection('longOffline', 'Offline >24h', groups.longOffline, 'war-unknown')}
 
       <div style="margin-top:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#0f1116;">
         <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="tpda-war-log-toggle">
@@ -1313,10 +1347,26 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     if (warBody) {
       warBody.addEventListener('click', (e) => {
         const btn = e.target.closest('.tpda-war-copy-btn');
-        if (!btn) return;
-        const text = btn.dataset.copy || '';
-        if (text) copyToClipboard(text, btn);
+        if (btn) {
+          const text = btn.dataset.copy || '';
+          if (text) copyToClipboard(text, btn);
+          return;
+        }
+        const toggle = e.target.closest('.tpda-war-section-toggle');
+        if (toggle) {
+          const key = toggle.dataset.section;
+          if (key) {
+            STATE.collapsed[key] = !STATE.collapsed[key];
+            saveCollapsedState();
+            renderPanel();
+          }
+        }
       });
+    }
+
+    // Start live timer ticking for hospital/jail/flight seconds
+    if (!STATE.timerTickId) {
+      STATE.timerTickId = setInterval(tickTimers, 1000);
     }
 
     const logToggle = document.getElementById('tpda-war-log-toggle');
