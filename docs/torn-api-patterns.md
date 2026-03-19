@@ -152,6 +152,34 @@ When migrating a script from v1 to v2:
 
 Hook `window.fetch` and `XMLHttpRequest` to intercept API responses made by the Torn website itself. This lets scripts get data without making their own API calls.
 
+### TornW3B — Third-Party Bazaar Prices
+
+The Torn API v2 `bazaar` selection returns a bazaar *directory* (store names/stats), NOT per-item price listings. To get bazaar floor prices for specific items, use the **TornW3B** service (same approach used by TornTools):
+
+```
+GET https://weav3r.dev/api/marketplace/{itemId}
+```
+
+Response:
+```json
+{
+  "item_id": 186,
+  "item_name": "Sheep Plushie",
+  "market_price": 600,
+  "bazaar_average": 599,
+  "total_listings": 840,
+  "listings": [
+    { "item_id": 186, "player_id": 123, "player_name": "Someone", "quantity": 2, "price": 579, "content_updated": 1773911313, "last_checked": 1773911313 },
+    ...
+  ]
+}
+```
+
+- **No API key required**
+- Listings sorted by price ascending (first = cheapest)
+- `bazaar_average` is the average across all bazaar listings
+- `content_updated` / `last_checked` are Unix timestamps
+
 ### API Key Sources
 
 1. **Torn PDA injection:** `###PDA-APIKEY###` placeholder replaced at runtime

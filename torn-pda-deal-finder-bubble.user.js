@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.2.0
-// @description  Fetches item market floor and average prices for all 13 Torn plushies. Shows a sortable table with floor prices and set costs.
+// @version      2.3.0
+// @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
+// @connect      weav3r.dev
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
@@ -499,6 +500,7 @@
   async function fetchMarketData(itemId) {
     if (!STATE.apiKey) throw new Error('No API key');
     const url = `https://api.torn.com/v2/market/${itemId}/itemmarket?key=${STATE.apiKey}`;
+    addLog(`[API] GET /v2/market/${itemId}/itemmarket`);
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.error}`);
@@ -506,11 +508,33 @@
        { itemmarket: { item: { id, name, type, average_price }, listings: [{price, amount}, ...], cache_timestamp }, _metadata } */
     const im = data.itemmarket || {};
     const listings = im.listings || [];
+    addLog(`[API] itemmarket ${itemId}: ${listings.length} listings, avg=${im.item?.average_price ?? 'n/a'}`);
     return {
       floor: listings.length ? listings[0].price : null,
       avg: im.item?.average_price ?? null,
       count: listings.length
     };
+  }
+
+  async function fetchBazaarData(itemId) {
+    const url = `https://weav3r.dev/api/marketplace/${itemId}`;
+    addLog(`[W3B] GET /api/marketplace/${itemId}`);
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        addLog(`[W3B] bazaar ${itemId}: HTTP ${resp.status}`);
+        return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0 };
+      }
+      const data = await resp.json();
+      const listings = data.listings || [];
+      const bazaarFloor = listings.length ? listings[0].price : null;
+      const bazaarAvg = data.bazaar_average ?? null;
+      addLog(`[W3B] bazaar ${itemId}: floor=${bazaarFloor ?? 'n/a'} avg=${bazaarAvg ?? 'n/a'} (${listings.length} listings)`);
+      return { bazaarFloor, bazaarAvg, bazaarCount: listings.length };
+    } catch (err) {
+      addLog(`[W3B] bazaar ${itemId}: ${err.message}`);
+      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0 };
+    }
   }
 
   async function fetchAllPrices(force) {
@@ -530,14 +554,26 @@
       const p = PLUSHIES[i];
       STATE.fetchProgress = i;
       try {
-        const data = await fetchMarketData(p.id);
+        /* Fetch item market (Torn API) and bazaar (TornW3B) in parallel */
+        const [market, bazaar] = await Promise.all([
+          fetchMarketData(p.id),
+          fetchBazaarData(p.id)
+        ]);
+        const best = Math.min(
+          market.floor ?? Infinity,
+          bazaar.bazaarFloor ?? Infinity
+        );
         STATE.prices[p.id] = {
-          floor: data.floor,
-          avg: data.avg,
-          listingCount: data.count,
+          floor: market.floor,
+          avg: market.avg,
+          listingCount: market.count,
+          bazaarFloor: bazaar.bazaarFloor,
+          bazaarAvg: bazaar.bazaarAvg,
+          bazaarCount: bazaar.bazaarCount,
+          best: best === Infinity ? null : best,
           fetchedAt: nowTs()
         };
-        addLog(`${p.name}: floor=${formatMoney(data.floor)} avg=${formatMoney(data.avg)} (${data.count} listings)`);
+        addLog(`${p.name}: market=${formatMoney(market.floor)} bazaar=${formatMoney(bazaar.bazaarFloor)} best=${formatMoney(best === Infinity ? null : best)}`);
       } catch (err) {
         addLog(`ERROR fetching ${p.name}: ${err.message}`);
       }
@@ -559,8 +595,9 @@
     const rows = PLUSHIES.map(p => {
       const d = STATE.prices[p.id] || {};
       const floor = d.floor || null;
-      const avg = d.avg || null;
-      return { ...p, floor, avg };
+      const bazaar = d.bazaarFloor || null;
+      const best = d.best || null;
+      return { ...p, floor, bazaar, best };
     });
 
     const col = STATE.sortCol;
@@ -608,26 +645,32 @@
 
     html += `<div style="overflow-x:auto;"><table class="tpda-plush-table"><thead><tr>`;
     html += `<th data-col="name">Plushie${arrow('name')}</th>`;
-    html += `<th data-col="floor">Floor${arrow('floor')}</th>`;
-    html += `<th data-col="avg">Avg${arrow('avg')}</th>`;
+    html += `<th data-col="floor">Market${arrow('floor')}</th>`;
+    html += `<th data-col="bazaar">Bazaar${arrow('bazaar')}</th>`;
+    html += `<th data-col="best">Best${arrow('best')}</th>`;
     html += `</tr></thead><tbody>`;
 
-    let totalFloor = 0;
+    let totalBest = 0;
     let allHavePrices = true;
 
     for (const r of rows) {
-      if (r.floor) totalFloor += r.floor; else allHavePrices = false;
+      if (r.best) totalBest += r.best; else allHavePrices = false;
+
+      /* Highlight the source that provides the best price */
+      const floorIsBest = r.floor && r.best && r.floor === r.best;
+      const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
 
       html += `<tr>`;
       html += `<td>${escapeHtml(r.name)}</td>`;
-      html += `<td class="tpda-plush-best">${formatMoney(r.floor)}</td>`;
-      html += `<td>${formatMoney(r.avg)}</td>`;
+      html += `<td${floorIsBest ? ' class="tpda-plush-best"' : ''}>${formatMoney(r.floor)}</td>`;
+      html += `<td${bazaarIsBest ? ' class="tpda-plush-best"' : ''}>${formatMoney(r.bazaar)}</td>`;
+      html += `<td class="tpda-plush-best">${formatMoney(r.best)}</td>`;
       html += `</tr>`;
     }
 
     html += `<tr class="total-row">`;
-    html += `<td>Full Set (13)</td><td></td>`;
-    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalFloor) : '\u2014'}</td>`;
+    html += `<td>Full Set (13)</td><td></td><td></td>`;
+    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalBest) : '\u2014'}</td>`;
     html += `</tr></tbody></table></div>`;
 
     // Debug log

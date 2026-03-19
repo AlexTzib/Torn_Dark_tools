@@ -344,27 +344,30 @@ Every script has:
 
 **Key constants:**
 - `PLUSHIES` — Array of 13 objects `{ id, name }` for all Torn plushies (IDs: 186, 187, 215, 258, 261, 266, 268, 269, 273, 274, 281, 384, 618)
-- `API_DELAY_MS` — 250ms delay between API calls
+- `API_DELAY_MS` — 250ms delay between plushie iterations
 - `CACHE_TTL_MS` — 10 minutes
 
 **Key functions:**
 - `fetchMarketData(itemId)` — Fetches `api.torn.com/v2/market/{id}/itemmarket`; returns `{ floor, avg, count }`
-- `fetchAllPrices(force)` — Sequentially fetches all 13 plushie prices with 250ms delay, updates UI mid-fetch
-- `getSortedPlushies()` — Returns plushie rows sorted by the current sort column/direction
-- `renderPanel()` — Renders API key input (if needed), status bar, sortable price table, and debug log
+- `fetchBazaarData(itemId)` — Fetches `weav3r.dev/api/marketplace/{id}` (TornW3B); returns `{ bazaarFloor, bazaarAvg, bazaarCount }`. No API key needed.
+- `fetchAllPrices(force)` — For each plushie: calls both `fetchMarketData` and `fetchBazaarData` in parallel (`Promise.all`), then sleeps 250ms before the next plushie. Computes `best = min(market floor, bazaar floor)`.
+- `getSortedPlushies()` — Returns plushie rows sorted by the current sort column/direction (name, floor, bazaar, best)
+- `renderPanel()` — Renders API key input (if needed), status bar, sortable price table (Market/Bazaar/Best columns), and debug log
 - `handleApiPayload(url, data)` — Extracts API key from passively intercepted traffic
 
 **Data flow:**
 1. API key resolved (saved → network-intercepted → manual entry)
 2. On panel open: loads cached prices, auto-fetches if cache older than 10 minutes
-3. `fetchAllPrices()` calls `v2/market/{id}/itemmarket` for each plushie
-4. V2 response: `{ itemmarket: { item: { average_price }, listings: [{ price, amount }] } }`
-5. Extracts floor price (first listing) and average price
-6. `renderPanel()` displays sortable table with Floor, Avg columns and full-set total
+3. For each plushie (sequentially, 250ms apart):
+   - `fetchMarketData()` → Torn API v2 → `{ floor, avg, count }`
+   - `fetchBazaarData()` → TornW3B → `{ bazaarFloor, bazaarAvg, bazaarCount }`
+   - Both run in parallel via `Promise.all`
+4. `best = Math.min(market floor, bazaar floor)` — the cheapest option across both sources
+5. `renderPanel()` displays sortable table with Market, Bazaar, Best columns; highlights which source provides the best price; full-set total at bottom
 
-> **Note:** The v1 `bazaar` selection (per-item bazaar price listings) has no v2 equivalent. The v2 `bazaar` endpoint returns a bazaar directory (store names/stats), not item prices. Only `itemmarket` provides per-item pricing in v2.
+> **Bazaar source:** The Torn API v2 `bazaar` endpoint returns a bazaar directory (store names/stats), NOT per-item price listings. Bazaar floor prices come from TornW3B (`weav3r.dev`), the same third-party service used by TornTools.
 
-**No DOM scraping.** All data comes from direct Torn API market endpoint calls.
+**No DOM scraping.** Item market data from Torn API v2, bazaar data from TornW3B.
 
 ### War Bubble (`torn-war-bubble.user.js`)
 
@@ -667,6 +670,7 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 | `user` | `bars,cooldowns,battlestats,stocks,money,profile` | AI Advisor | Player status, bars, cooldowns, money |
 | `faction` | `basic` | AI Advisor, War Bubble | Faction members, war status |
 | `market` (v2) | `itemmarket` (via `/v2/market/{id}/itemmarket`) | Plushie Prices | Item market floor and average prices per item |
+| *(external)* | TornW3B `weav3r.dev/api/marketplace/{id}` | Plushie Prices | Bazaar floor prices (no API key needed) |
 | `torn` | (various, intercepted) | AI Advisor | Market data, item values |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.

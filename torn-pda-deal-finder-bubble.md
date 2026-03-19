@@ -30,25 +30,31 @@ It displays a draggable bubble that expands into a panel showing current **bazaa
 │                                               │
 │  ┌──────────────┐    ┌─────────────────────┐  │
 │  │ API key       │───▶│ fetchAllPrices()     │  │
-│  │ (PDA/manual/  │    │ 13 sequential calls  │  │
-│  │  intercepted) │    │ 250ms apart          │  │
+│  │ (PDA/manual/  │    │ 13 plushies          │  │
+│  │  intercepted) │    │ 250ms between each   │  │
 │  └──────────────┘    └────────┬────────────┘  │
 │                               │               │
-│              For each plushie:│               │
-│              api.torn.com/market/{id}         │
-│              ?selections=bazaar,itemmarket    │
-│                               │               │
-│                    ┌──────────▼──────────┐    │
-│                    │ Extract floor prices │    │
-│                    │ bazaar[0].cost       │    │
-│                    │ itemmarket[0].cost   │    │
-│                    └──────────┬──────────┘    │
-│                               │               │
-│                    ┌──────────▼──────────┐    │
-│                    │ renderPanel()        │    │
-│                    │ Sortable price table │    │
-│                    │ + full set total     │    │
-│                    └─────────────────────┘    │
+│          For each plushie (in parallel):       │
+│    ┌──────────────────┐ ┌─────────────────┐   │
+│    │ Torn API v2       │ │ TornW3B          │   │
+│    │ /v2/market/{id}/  │ │ weav3r.dev/api/  │   │
+│    │ itemmarket        │ │ marketplace/{id} │   │
+│    └────────┬─────────┘ └───────┬─────────┘   │
+│             │                   │              │
+│             └─────────┬─────────┘              │
+│                       │                        │
+│            ┌──────────▼──────────┐             │
+│            │ Extract floor prices │             │
+│            │ market = API floor   │             │
+│            │ bazaar = W3B floor   │             │
+│            │ best = min(both)     │             │
+│            └──────────┬──────────┘             │
+│                       │                        │
+│            ┌──────────▼──────────┐             │
+│            │ renderPanel()        │             │
+│            │ Sortable price table │             │
+│            │ + full set total     │             │
+│            └─────────────────────┘             │
 └───────────────────────────────────────────────┘
 ```
 
@@ -63,16 +69,23 @@ The cheapest source for each plushie is highlighted. A "Full Set (13)" row at th
 
 ### API Calls
 
-The script makes **13 API calls** per refresh (one per plushie), each fetching item market listings via the **v2 API**:
+The script makes **two parallel calls per plushie** (13 plushies = 26 total calls per refresh):
+
+1. **Item Market** — Torn API v2:
 ```
 GET https://api.torn.com/v2/market/{plushie_id}/itemmarket?key={key}
 ```
+Returns `{ itemmarket: { item: { average_price }, listings: [{ price, amount }] } }`. Floor price = cheapest listing.
 
-The v2 response returns `{ itemmarket: { item: { average_price }, listings: [{ price, amount }] } }`. The script extracts the floor price (cheapest listing) and the average price.
+2. **Bazaar** — TornW3B (third-party, no key needed):
+```
+GET https://weav3r.dev/api/marketplace/{plushie_id}
+```
+Returns `{ bazaar_average, listings: [{ price, quantity, player_name, ... }] }`. Floor price = cheapest listing.
 
-> **Note:** The v1 `bazaar` selection (player bazaar price listings) has no equivalent in v2 — the v2 `bazaar` endpoint returns a bazaar directory, not item prices. Only item market data is available per-item in v2.
+> **Why TornW3B?** The Torn API v2 `bazaar` selection returns a bazaar *directory* (store names/stats), not per-item price listings. This is the same approach used by TornTools.
 
-Calls are made sequentially with a 250ms delay between them to stay well within Torn's rate limit (~100 requests/minute). A full refresh takes approximately 3-4 seconds.
+Calls are made sequentially per plushie (API + W3B in parallel), with a 250ms delay between plushies to stay within Torn's rate limit (~100 requests/minute). A full refresh takes approximately 3-4 seconds.
 
 ## Plushie IDs
 
@@ -96,7 +109,8 @@ Calls are made sequentially with a 250ms delay between them to stay well within 
 
 || Source | Method | Notes |
 ||---|---|---|
-|| Plushie item market prices | API v2 fetch (`v2/market/{id}/itemmarket`) | Returns `{ itemmarket: { listings: [{price, amount}], item: {average_price} } }`; floor from first listing |
+|| Plushie item market prices | Torn API v2 (`/v2/market/{id}/itemmarket`) | Returns `{ itemmarket: { listings: [{price, amount}], item: {average_price} } }`; floor from first listing |
+|| Plushie bazaar prices | TornW3B (`weav3r.dev/api/marketplace/{id}`) | Returns `{ bazaar_average, listings: [{price, quantity, player_name}] }`; floor from first listing. No API key needed. |
 || API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance
@@ -107,7 +121,7 @@ Calls are made sequentially with a 250ms delay between them to stay well within 
 || One-click-one-action principle | Fully compliant — no game actions are triggered |
 || Read-only data display | Fully compliant — all data shown is price information from the Torn API |
 || API key handling | User's own key only; stored locally in `localStorage`; never sent externally |
-|| No external server communication | Fully compliant — only contacts `api.torn.com` |
+|| No external server communication | Contacts `api.torn.com` (item market) and `weav3r.dev` (bazaar prices via TornW3B). No user data is sent to TornW3B — only item IDs. |
 || API rate limits | 13 calls per refresh, 250ms apart (~52/min); well under the 100/min limit |
 || Passive fetch/XHR interception | Used only to capture API key from existing traffic; does not modify requests |
 || localStorage usage | Price cache (10-min TTL), API key, and UI positions only |
@@ -138,7 +152,8 @@ Calls are made sequentially with a 250ms delay between them to stay well within 
 
 ## Limitations
 
-- Requires an API key (unlike the old Deal Finder which was DOM-scraping-only).
-- Each refresh makes 13 API calls. Avoid spamming the Refresh button.
+- Requires an API key for item market prices (bazaar prices via TornW3B need no key).
+- Each refresh makes 26 calls (13 to Torn API + 13 to TornW3B). Avoid spamming the Refresh button.
+- Bazaar prices depend on TornW3B availability — if the service is down, only item market prices are shown.
 - Prices are a snapshot — they can change between the first and last API call in a refresh cycle.
 - The 10-minute cache TTL means prices may be slightly stale if checked within the cache window without refreshing.
