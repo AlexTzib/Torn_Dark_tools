@@ -26,6 +26,7 @@ SCRIPTS = {
     'torn-deal-finder.src.js':         'torn-pda-deal-finder-bubble.user.js',
     'torn-war-bubble.src.js':          'torn-war-bubble.user.js',
     'torn-strip-poker.src.js':         'torn-strip-poker-bubble.user.js',
+    'torn-war-manager.src.js':         'torn-war-manager.user.js',
 }
 
 

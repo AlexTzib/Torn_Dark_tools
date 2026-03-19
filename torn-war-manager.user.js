@@ -1,11 +1,10 @@
 // ==UserScript==
-// @name         Torn PDA - Plushie Prices
-// @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.5.0
-// @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
-// @author       Alex + Devin
+// @name         Torn PDA - War Manager Bubble
+// @namespace    alex.torn.pda.war.manager.bubble
+// @version      1.0.0
+// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, generates copy-paste messages
+// @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
-// @connect      weav3r.dev
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
@@ -13,42 +12,47 @@
 (function () {
   'use strict';
 
-  /* ── constants ─────────────────────────────────────────────── */
-  const SCRIPT_KEY = 'tpda_plushie_prices_v1';
-  const BUBBLE_ID = 'tpda-plushie-bubble';
-  const PANEL_ID = 'tpda-plushie-panel';
-  const HEADER_ID = 'tpda-plushie-header';
+  const PDA_INJECTED_KEY = '###PDA-APIKEY###';
+
+  const SCRIPT_KEY = 'tpda_war_manager_v1';
+  const BUBBLE_ID = 'tpda-war-mgr-bubble';
+  const PANEL_ID = 'tpda-war-mgr-panel';
+  const HEADER_ID = 'tpda-war-mgr-header';
   const BUBBLE_SIZE = 56;
-  const API_DELAY_MS = 250;
-  const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-  const PLUSHIES = [
-    { id: 186, name: 'Sheep Plushie' },
-    { id: 187, name: 'Teddy Bear Plushie' },
-    { id: 215, name: 'Kitten Plushie' },
-    { id: 258, name: 'Jaguar Plushie' },
-    { id: 261, name: 'Wolverine Plushie' },
-    { id: 266, name: 'Nessie Plushie' },
-    { id: 268, name: 'Red Fox Plushie' },
-    { id: 269, name: 'Monkey Plushie' },
-    { id: 273, name: 'Chamois Plushie' },
-    { id: 274, name: 'Panda Plushie' },
-    { id: 281, name: 'Lion Plushie' },
-    { id: 384, name: 'Camel Plushie' },
-    { id: 618, name: 'Stingray Plushie' },
+  const POLL_INTERVALS = [
+    { label: '1 min', ms: 60000 },
+    { label: '2 min', ms: 120000 },
+    { label: '5 min', ms: 300000 },
+    { label: '10 min', ms: 600000 }
   ];
+  const DEFAULT_POLL_MS = 120000;
+  const DEFAULT_THRESHOLD_PCT = 70;
 
-  /* ── state ─────────────────────────────────────────────────── */
   const STATE = {
-    apiKey: '',
+    apiKey: null,
     apiKeySource: '',
-    prices: {},
-    fetching: false,
-    fetchProgress: 0,
-    lastFetchAt: 0,
-    sortCol: 'name',
-    sortAsc: true,
-    ui: { minimized: true, zIndexBase: 999980 },
+    ownFactionId: null,
+    ownFactionName: '',
+    ownMembers: [],        // processed member objects
+    enemyFactionId: null,
+    enemyFactionName: '',
+    enemyMembers: [],      // processed member objects
+    detectedWarInfo: null,
+    lastFetchTs: 0,
+    lastError: '',
+    pollMs: loadPollMs(),
+    pollTimerId: null,
+    thresholdPct: loadThresholdPct(),
+    assignments: [],       // { own, enemy } pairs
+    profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
+    scanning: false,
+    scanProgress: 0,
+    scanTotal: 0,
+    ui: {
+      minimized: true,
+      zIndexBase: 999960
+    },
     _logs: []
   };
 
@@ -945,437 +949,685 @@
   }
 
 
+  /* ── Storage helpers ───────────────────────────────────────── */
 
-  /* ── utilities ─────────────────────────────────────────────── */
-  /* ── storage ───────────────────────────────────────────────── */
-  function loadCachedPrices() {
-    const cached = getStorage(`${SCRIPT_KEY}_prices`, null);
-    if (!cached) return;
-    STATE.prices = cached.prices || {};
-    STATE.lastFetchAt = cached.fetchedAt || 0;
-    addLog('Loaded cached prices (' + ageText(STATE.lastFetchAt) + ')');
+  function loadPollMs() {
+    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, DEFAULT_POLL_MS);
+    return POLL_INTERVALS.some(p => p.ms === saved) ? saved : DEFAULT_POLL_MS;
   }
 
-  function saveCachedPrices() {
-    setStorage(`${SCRIPT_KEY}_prices`, {
-      prices: STATE.prices,
-      fetchedAt: STATE.lastFetchAt
-    });
+  function savePollMs(ms) {
+    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
   }
 
-  /* ── bubble / panel position ───────────────────────────────── */
-  /* ── UI helpers ────────────────────────────────────────────── */
-  /* ── styles ────────────────────────────────────────────────── */
-  function ensureStyles() {
-    if (document.getElementById(`${SCRIPT_KEY}_style`)) return;
-    const style = document.createElement('style');
-    style.id = `${SCRIPT_KEY}_style`;
-    style.textContent = `
-      #${BUBBLE_ID} {
-        position: fixed;
-        width: ${BUBBLE_SIZE}px;
-        height: ${BUBBLE_SIZE}px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #9b59b6, #6c3483);
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        font-family: Arial, sans-serif;
-        font-size: 24px;
-        text-align: center;
-        line-height: 1.1;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-        border: 1px solid rgba(255,255,255,0.18);
-        user-select: none;
-        -webkit-user-select: none;
-        touch-action: none;
-      }
-      #${PANEL_ID} {
-        position: fixed;
-        width: 420px;
-        max-width: 95vw;
-        max-height: 80vh;
-        background: rgba(15,15,18,0.98);
-        color: #fff;
-        border: 1px solid #3a3a45;
-        border-radius: 14px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-        font-family: Arial, sans-serif;
-        font-size: 13px;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-      }
-      #${HEADER_ID} {
-        cursor: move;
-        touch-action: none;
-      }
-      .tpda-plush-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        color: #e0e0e0;
-      }
-      .tpda-plush-table th {
-        background: #1c1d24;
-        color: #ccc;
-        padding: 6px 8px;
-        text-align: left;
-        cursor: pointer;
-        user-select: none;
-        white-space: nowrap;
-        border-bottom: 1px solid #333;
-      }
-      .tpda-plush-table th:hover { background: #2a2c36; }
-      .tpda-plush-table td {
-        padding: 5px 8px;
-        color: #e0e0e0;
-        border-bottom: 1px solid #1e1f28;
-        white-space: nowrap;
-      }
-      .tpda-plush-table tr:hover td { background: rgba(155,89,182,0.08); }
-      .tpda-plush-best { color: #8dff8d; font-weight: bold; }
-      .tpda-plush-table a.tpda-price-link {
-        color: inherit;
-        text-decoration: none;
-        border-bottom: 1px dashed rgba(255,255,255,0.2);
-        cursor: pointer;
-      }
-      .tpda-plush-table a.tpda-price-link:hover {
-        border-bottom-color: #9b59b6;
-        color: #d9aaff;
-      }
-      .tpda-plush-table .total-row td {
-        border-top: 2px solid #9b59b6;
-        font-weight: bold;
-        padding-top: 8px;
-      }
-    `;
-    document.head.appendChild(style);
+  function loadThresholdPct() {
+    const saved = getStorage(`${SCRIPT_KEY}_threshold_pct`, DEFAULT_THRESHOLD_PCT);
+    return Math.max(10, Math.min(100, Number(saved) || DEFAULT_THRESHOLD_PCT));
   }
 
-  /* ── create bubble ─────────────────────────────────────────── */
-  function createBubble() {
-    if (getBubbleEl()) return;
-    const bubble = document.createElement('div');
-    bubble.id = BUBBLE_ID;
-    bubble.dataset.tpdaBubble = '1';
-    bubble.textContent = '\uD83E\uDDF8';
-
-    const pos = getBubblePosition();
-    bubble.style.right = `${pos.right}px`;
-    bubble.style.bottom = `${pos.bottom}px`;
-    bubble.style.zIndex = String(STATE.ui.zIndexBase);
-
-    bubble.addEventListener('click', (e) => {
-      if (bubble.dataset.dragged === '1') { bubble.dataset.dragged = '0'; return; }
-      e.preventDefault();
-      expandPanelNearBubble();
-    });
-
-    document.body.appendChild(bubble);
-    makeDraggableBubble(bubble);
+  function saveThresholdPct(pct) {
+    setStorage(`${SCRIPT_KEY}_threshold_pct`, pct);
   }
 
-  /* ── create panel ──────────────────────────────────────────── */
-  function createPanel() {
-    if (getPanelEl()) return;
-    const panel = document.createElement('div');
-    panel.id = PANEL_ID;
-    panel.style.display = 'none';
-    panel.style.zIndex = String(STATE.ui.zIndexBase);
-
-    panel.innerHTML = `
-      <div id="${HEADER_ID}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1c1d24;border-bottom:1px solid #333;flex:0 0 auto;">
-        <div>
-          <div style="font-weight:bold;">\uD83E\uDDF8 Plushie Prices</div>
-          <div style="font-size:11px;color:#bbb;">Item Market Floor &amp; Avg</div>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <button id="tpda-plush-refresh" style="background:#9b59b6;color:white;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;">Refresh</button>
-          <button id="tpda-plush-collapse" style="background:#444;color:white;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;">\u25CB</button>
-        </div>
-      </div>
-      <div id="tpda-plush-body" style="padding:12px;overflow-y:auto;flex:1 1 auto;"></div>
-    `;
-
-    document.body.appendChild(panel);
-
-    document.getElementById('tpda-plush-refresh').addEventListener('click', () => {
-      fetchAllPrices(true);
-    });
-    document.getElementById('tpda-plush-collapse').addEventListener('click', collapseToBubble);
-
-    makeDraggablePanel(panel, document.getElementById(HEADER_ID));
-
-    // Delegated click handler for common API-key and log cards
-    const panelBody = document.getElementById('tpda-plush-body');
-    panelBody.addEventListener('click', (e) => {
-      if (handleApiKeyClick(e, panelBody, () => { fetchAllPrices(true); renderPanel(); })) return;
-      handleLogClick(e, panelBody);
-    });
+  function getManualEnemyFactionId() {
+    return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
   }
 
-  /* ── expand / collapse hooks ─────────────────────────────────── */
-  function onPanelExpand() {
-    renderPanel();
-    fetchAllPrices();
+  function setManualEnemyFactionId(id) {
+    setStorage(`${SCRIPT_KEY}_enemy_faction_id`, String(id || ''));
   }
 
-  function onPanelCollapse() {
-    if (STATE.refreshTimer) { clearInterval(STATE.refreshTimer); STATE.refreshTimer = null; }
-  }
+  /* ── Faction data fetching ─────────────────────────────────── */
 
-  /* ── draggable ─────────────────────────────────────────────── */
-  /* ── network hooks (capture API key from PDA traffic) ──────── */
-  function hookFetch() {
-    const originalFetch = window.fetch;
-    if (!originalFetch) return;
-    window.fetch = async function (...args) {
-      try {
-        const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
-        if (url.includes('api.torn.com/')) extractApiKeyFromUrl(url);
-      } catch {}
-      return originalFetch.apply(this, args);
-    };
-  }
-
-  function hookXHR() {
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this.__tpda_url = url;
-      try {
-        const u = String(url || '');
-        if (u.includes('api.torn.com/')) extractApiKeyFromUrl(u);
-      } catch {}
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      return origSend.apply(this, args);
-    };
-  }
-
-  /* ── cross-origin GET helper (PDA native → plain fetch) ───── */
-  async function crossOriginGet(url) {
-    /* PDA native HTTP — bypasses WebView restrictions entirely */
-    if (typeof PDA_httpGet === 'function') {
-      addLog('[W3B] using PDA_httpGet');
-      const r = await PDA_httpGet(url, {});
-      if (r && r.responseText) return JSON.parse(r.responseText);
-      throw new Error(`PDA_httpGet status ${r?.status || 'unknown'}`);
-    }
-    /* Plain fetch — works in Tampermonkey (weav3r.dev sends CORS: *) */
-    addLog('[W3B] using fetch');
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return resp.json();
-  }
-
-  /* ── fetch plushie prices from Torn API ────────────────────── */
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  async function fetchMarketData(itemId) {
-    if (!STATE.apiKey) throw new Error('No API key');
-    const url = `https://api.torn.com/v2/market/${itemId}/itemmarket?key=${STATE.apiKey}`;
-    addLog(`[API] GET /v2/market/${itemId}/itemmarket`);
-    const resp = await fetch(url);
-    const data = await resp.json();
-    if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.error}`);
-    /* v2 /market/{id}/itemmarket returns:
-       { itemmarket: { item: { id, name, type, average_price }, listings: [{price, amount}, ...], cache_timestamp }, _metadata } */
-    const im = data.itemmarket || {};
-    const listings = im.listings || [];
-    addLog(`[API] itemmarket ${itemId}: ${listings.length} listings, avg=${im.item?.average_price ?? 'n/a'}`);
-    return {
-      floor: listings.length ? listings[0].price : null,
-      avg: im.item?.average_price ?? null,
-      count: listings.length
-    };
-  }
-
-  async function fetchBazaarData(itemId) {
-    const url = `https://weav3r.dev/api/marketplace/${itemId}`;
-    addLog(`[W3B] GET /api/marketplace/${itemId}`);
+  async function fetchOwnFactionMembers() {
+    if (!STATE.apiKey) return;
     try {
-      const data = await crossOriginGet(url);
-      const listings = data.listings || [];
-      const bazaarFloor = listings.length ? listings[0].price : null;
-      const bazaarAvg = data.bazaar_average ?? null;
-      addLog(`[W3B] bazaar ${itemId}: floor=${bazaarFloor ?? 'n/a'} avg=${bazaarAvg ?? 'n/a'} (${listings.length} listings)`);
-      return { bazaarFloor, bazaarAvg, bazaarCount: listings.length };
+      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      addLog('Fetching own faction members...');
+      const res = await fetch(url, { method: 'GET' });
+      const data = await res.json();
+      if (data?.error) {
+        addLog('Own faction API error: ' + (data.error.error || JSON.stringify(data.error)));
+        return;
+      }
+      STATE.ownFactionId = String(data?.ID || data?.id || '');
+      STATE.ownFactionName = data?.name || '';
+      addLog('Own faction: ' + (STATE.ownFactionName || STATE.ownFactionId));
+
+      const raw = normalizeMembers(data);
+      STATE.ownMembers = raw.map(m => {
+        const action = memberLastActionInfo(m);
+        const loc = inferLocationState(m);
+        const timer = extractTimerInfo(m, loc.bucket);
+        return {
+          id: String(m.id || ''),
+          name: String(m.name || ''),
+          level: m.level || '',
+          position: m.position || '',
+          isOnline: action.isOnline,
+          minutes: action.minutes,
+          relative: action.relative,
+          locationBucket: loc.bucket,
+          locationLabel: loc.label,
+          remainingSec: timer.remainingSec,
+          timerSource: timer.source
+        };
+      });
+      addLog(`Own faction: ${STATE.ownMembers.length} members loaded`);
     } catch (err) {
-      addLog(`[W3B] bazaar ${itemId}: ${err.message}`);
-      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0 };
+      addLog('Error fetching own faction: ' + (err?.message || err));
     }
   }
 
-  async function fetchAllPrices(force) {
-    if (STATE.fetching) { addLog('Fetch already in progress'); return; }
-    if (!STATE.apiKey) {
-      addLog('No API key \u2014 enter one or let PDA inject it');
+  async function fetchEnemyFactionMembers() {
+    if (!STATE.apiKey || !STATE.enemyFactionId) return;
+    STATE.lastError = '';
+    try {
+      const url = `https://api.torn.com/faction/${encodeURIComponent(STATE.enemyFactionId)}?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      addLog('Fetching enemy faction members...');
+      const res = await fetch(url, { method: 'GET' });
+      const data = await res.json();
+      if (data?.error) {
+        STATE.lastError = 'Enemy faction API error: ' + (data.error.error || JSON.stringify(data.error));
+        addLog(STATE.lastError);
+        return;
+      }
+      STATE.enemyFactionName = data?.name || STATE.enemyFactionName;
+
+      const raw = normalizeMembers(data);
+      STATE.enemyMembers = raw.map(m => {
+        const action = memberLastActionInfo(m);
+        const loc = inferLocationState(m);
+        const timer = extractTimerInfo(m, loc.bucket);
+        return {
+          id: String(m.id || ''),
+          name: String(m.name || ''),
+          level: m.level || '',
+          position: m.position || '',
+          isOnline: action.isOnline,
+          minutes: action.minutes,
+          relative: action.relative,
+          locationBucket: loc.bucket,
+          locationLabel: loc.label,
+          remainingSec: timer.remainingSec,
+          timerSource: timer.source
+        };
+      });
+      STATE.lastFetchTs = nowTs();
+      addLog(`Enemy faction: ${STATE.enemyMembers.length} members loaded`);
+    } catch (err) {
+      STATE.lastError = 'Error fetching enemy faction: ' + (err?.message || err);
+      addLog(STATE.lastError);
+    }
+  }
+
+  async function detectEnemyFaction() {
+    const manual = getManualEnemyFactionId();
+    if (manual) {
+      STATE.enemyFactionId = String(manual);
+      addLog('Using manual enemy faction ID: ' + manual);
+      return;
+    }
+
+    const warInfo = await fetchOwnFactionWars();
+    if (warInfo) {
+      STATE.enemyFactionId = warInfo.enemyId;
+      STATE.enemyFactionName = warInfo.enemyName || '';
+      STATE.detectedWarInfo = warInfo;
+      addLog('Auto-detected enemy from API: ' + warInfo.enemyId);
+    }
+  }
+
+  async function refreshAll() {
+    await fetchOwnFactionMembers();
+    await fetchEnemyFactionMembers();
+    computeAssignments();
+    renderPanel();
+  }
+
+  /* ── Stat scanning ─────────────────────────────────────────── */
+
+  async function scanAllStats() {
+    if (STATE.scanning) { STATE.scanning = false; return; }
+    if (!STATE.apiKey) { addLog('No API key for scan'); return; }
+
+    const allIds = [
+      ...STATE.ownMembers.map(m => m.id),
+      ...STATE.enemyMembers.map(m => m.id)
+    ].filter(Boolean);
+
+    const toScan = allIds.filter(id => {
+      const c = STATE.profileCache[id];
+      return !c || (nowTs() - c.fetchedAt) >= PROFILE_CACHE_TTL;
+    });
+
+    if (!toScan.length) {
+      addLog('All profiles already cached');
+      computeAssignments();
       renderPanel();
       return;
     }
 
-    STATE.fetching = true;
-    STATE.fetchProgress = 0;
-    addLog('Fetching prices for ' + PLUSHIES.length + ' plushies\u2026');
+    STATE.scanning = true;
+    STATE.scanProgress = 0;
+    STATE.scanTotal = toScan.length;
+    addLog(`Scanning stats for ${toScan.length} members (${allIds.length - toScan.length} cached)...`);
     renderPanel();
 
-    for (let i = 0; i < PLUSHIES.length; i++) {
-      const p = PLUSHIES[i];
-      STATE.fetchProgress = i;
-      try {
-        /* Fetch item market (Torn API) and bazaar (TornW3B) in parallel */
-        const [market, bazaar] = await Promise.all([
-          fetchMarketData(p.id),
-          fetchBazaarData(p.id)
-        ]);
-        const best = Math.min(
-          market.floor ?? Infinity,
-          bazaar.bazaarFloor ?? Infinity
-        );
-        STATE.prices[p.id] = {
-          floor: market.floor,
-          avg: market.avg,
-          listingCount: market.count,
-          bazaarFloor: bazaar.bazaarFloor,
-          bazaarAvg: bazaar.bazaarAvg,
-          bazaarCount: bazaar.bazaarCount,
-          best: best === Infinity ? null : best,
-          fetchedAt: nowTs()
-        };
-        addLog(`${p.name}: market=${formatMoney(market.floor)} bazaar=${formatMoney(bazaar.bazaarFloor)} best=${formatMoney(best === Infinity ? null : best)}`);
-      } catch (err) {
-        addLog(`ERROR fetching ${p.name}: ${err.message}`);
+    for (let i = 0; i < toScan.length; i++) {
+      if (!STATE.scanning) break;
+      STATE.scanProgress = i + 1;
+      await fetchMemberProfile(toScan[i]);
+      if (i < toScan.length - 1) await sleep(SCAN_API_GAP_MS);
+      if ((i + 1) % 5 === 0 || i === toScan.length - 1) {
+        computeAssignments();
+        renderPanel();
       }
-      if (!STATE.ui.minimized) renderPanel();
-      if (i < PLUSHIES.length - 1) await sleep(API_DELAY_MS);
     }
 
-    STATE.fetchProgress = PLUSHIES.length;
-    STATE.lastFetchAt = nowTs();
-    STATE.fetching = false;
-    saveCachedPrices();
-    setSharedApiKey(STATE.apiKey);
-    addLog('All prices fetched');
+    STATE.scanning = false;
+    saveProfileCache();
+    addLog('Stat scan complete');
+    computeAssignments();
     renderPanel();
   }
 
-  /* ── render panel ──────────────────────────────────────────── */
-  function getSortedPlushies() {
-    const rows = PLUSHIES.map(p => {
-      const d = STATE.prices[p.id] || {};
-      const floor = d.floor || null;
-      const bazaar = d.bazaarFloor || null;
-      const best = d.best || null;
-      return { ...p, floor, bazaar, best };
+  /* ── Target assignment algorithm ───────────────────────────── */
+
+  function computeAssignments() {
+    const pct = STATE.thresholdPct / 100;
+
+    // Get online/available own members with stat data
+    const ownAvailable = STATE.ownMembers
+      .filter(m => m.isOnline && m.locationBucket === 'torn')
+      .map(m => {
+        const p = STATE.profileCache[m.id];
+        return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
+      })
+      .filter(m => m.estimate)
+      .sort((a, b) => b.midpoint - a.midpoint); // strongest first
+
+    // Get targetable enemies (not in jail, preferring online/torn/hospital)
+    const enemies = STATE.enemyMembers
+      .filter(m => m.locationBucket !== 'jail')
+      .map(m => {
+        const p = STATE.profileCache[m.id];
+        return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
+      })
+      .filter(m => m.estimate);
+
+    // Sort enemies: online in Torn first, then hospital (soon out), then others
+    enemies.sort((a, b) => {
+      const prio = (m) => {
+        if (m.isOnline && m.locationBucket === 'torn') return 0;
+        if (m.locationBucket === 'hospital' && m.remainingSec != null && m.remainingSec < 600) return 1;
+        if (m.isOnline) return 2;
+        if (m.locationBucket === 'hospital') return 3;
+        if (m.minutes <= 60) return 4;
+        return 5;
+      };
+      return prio(a) - prio(b) || a.midpoint - b.midpoint;
     });
 
-    const col = STATE.sortCol;
-    const dir = STATE.sortAsc ? 1 : -1;
-    rows.sort((a, b) => {
-      if (col === 'name') return dir * a.name.localeCompare(b.name);
-      const av = a[col] || Infinity;
-      const bv = b[col] || Infinity;
-      return dir * (av - bv);
-    });
-    return rows;
+    const assigned = new Set();
+    const assignments = [];
+
+    for (const own of ownAvailable) {
+      const maxTargetStats = own.midpoint * pct;
+      const targets = enemies.filter(e =>
+        !assigned.has(e.id) && e.midpoint <= maxTargetStats
+      );
+
+      if (targets.length > 0) {
+        // Pick the strongest target within range
+        const target = targets[targets.length - 1];
+        assigned.add(target.id);
+        assignments.push({ own, enemy: target });
+      }
+    }
+
+    STATE.assignments = assignments;
+    addLog(`Assignments computed: ${assignments.length} pairs (${ownAvailable.length} available, threshold ${STATE.thresholdPct}%)`);
   }
 
+  /* ── Message generation ────────────────────────────────────── */
+
+  function profileUrl(id) {
+    return `https://www.torn.com/profiles.php?XID=${encodeURIComponent(id)}`;
+  }
+
+  function attackUrl(id) {
+    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(id)}`;
+  }
+
+  function generateAssignmentMessages() {
+    if (!STATE.assignments.length) return 'No assignments yet. Scan stats first!';
+
+    return STATE.assignments.map(({ own, enemy }) => {
+      const ownName = own.name;
+      const enemyName = enemy.name;
+      const enemyProfile = profileUrl(enemy.id);
+      const enemyAttack = attackUrl(enemy.id);
+      const enemyEst = enemy.estimate ? ` [${enemy.estimate.label}]` : '';
+
+      let hospNote = '';
+      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
+        hospNote = ` (in hospital, out in ${formatSeconds(enemy.remainingSec)})`;
+      }
+
+      return `${ownName} -> ${enemyName}${enemyEst}${hospNote}\n  Profile: ${enemyProfile}\n  Attack: ${enemyAttack}`;
+    }).join('\n\n');
+  }
+
+  function generateCompactMessages() {
+    if (!STATE.assignments.length) return 'No assignments yet.';
+
+    return STATE.assignments.map(({ own, enemy }) => {
+      const est = enemy.estimate ? ` [${enemy.estimate.label}]` : '';
+      let hospNote = '';
+      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
+        hospNote = ` \u23F0 out in ${formatSeconds(enemy.remainingSec)}`;
+      }
+      return `${own.name} \u2192 ${enemy.name}${est}${hospNote} ${profileUrl(enemy.id)}`;
+    }).join('\n');
+  }
+
+  /* ── UI ─────────────────────────────────────────────────────── */
+
+  function onPanelExpand() {
+    if (STATE.apiKey && !STATE.ownFactionId) {
+      refreshAll();
+    }
+  }
+
+  function onPanelCollapse() {}
+
+  function ensureStyles() {
+    if (document.getElementById('tpda-war-mgr-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'tpda-war-mgr-styles';
+    style.textContent = `
+      #${BUBBLE_ID} {
+        position: fixed;
+        width: ${BUBBLE_SIZE}px; height: ${BUBBLE_SIZE}px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #4a3d7a, #7b2ff7);
+        color: white;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: bold; font-size: 11px;
+        cursor: pointer; user-select: none;
+        box-shadow: 0 2px 12px rgba(123,47,247,0.35);
+        z-index: 999960;
+        transition: box-shadow 0.2s;
+      }
+      #${BUBBLE_ID}:hover { box-shadow: 0 4px 20px rgba(123,47,247,0.6); }
+
+      #${PANEL_ID} {
+        position: fixed;
+        width: 440px; max-height: 85vh;
+        background: #181a20; color: #e0e0e0;
+        border: 1px solid #2f3340; border-radius: 14px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        display: none; flex-direction: column;
+        z-index: 999960;
+        overflow: hidden;
+      }
+      #${HEADER_ID} {
+        padding: 12px 14px;
+        background: #1f2130;
+        cursor: grab;
+        display: flex; justify-content: space-between; align-items: center;
+        border-bottom: 1px solid #2f3340;
+        font-weight: bold; font-size: 14px;
+      }
+      #tpda-war-mgr-body {
+        padding: 12px 14px;
+        overflow-y: auto; flex: 1;
+      }
+      .mgr-own { color: #7ecfff; }
+      .mgr-enemy { color: #ff8a8a; }
+      .mgr-assign { padding: 8px; margin-bottom: 6px; border: 1px solid #2f3340; border-radius: 8px; background: #1a1c24; }
+      .mgr-muted { color: #888; font-size: 12px; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function createBubble() {
+    if (document.getElementById(BUBBLE_ID)) return;
+    const el = document.createElement('div');
+    el.id = BUBBLE_ID;
+    el.dataset.tpdaBubble = '1';
+    el.textContent = 'MGR';
+
+    const pos = getBubblePosition();
+    const lt = bubbleRightBottomToLeftTop(pos, BUBBLE_SIZE);
+    const clamped = clampToViewport(lt.left, lt.top, BUBBLE_SIZE, BUBBLE_SIZE);
+    el.style.left = `${clamped.left}px`;
+    el.style.top = `${clamped.top}px`;
+
+    el.addEventListener('click', (e) => {
+      if (el.dataset.dragged === '1') { el.dataset.dragged = '0'; return; }
+      expandPanelNearBubble();
+      renderPanel();
+    });
+
+    (document.body || document.documentElement).appendChild(el);
+    makeDraggableBubble(el);
+  }
+
+  function createPanel() {
+    if (document.getElementById(PANEL_ID)) return;
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
+      <div id="${HEADER_ID}">
+        <span>\u2694\uFE0F War Manager</span>
+        <button id="tpda-war-mgr-close"
+                style="background:none;border:none;color:#e0e0e0;font-size:18px;cursor:pointer;padding:0 4px;">\u2715</button>
+      </div>
+      <div id="tpda-war-mgr-body"></div>
+    `;
+    (document.body || document.documentElement).appendChild(panel);
+
+    document.getElementById('tpda-war-mgr-close').onclick = collapseToBubble;
+
+    const body = document.getElementById('tpda-war-mgr-body');
+    body.addEventListener('click', (e) => {
+      // Copy buttons
+      const copyBtn = e.target.closest('.tpda-mgr-copy-btn');
+      if (copyBtn) {
+        const text = copyBtn.dataset.copy;
+        if (text) copyToClipboard(text, copyBtn);
+        return;
+      }
+
+      // API key card
+      if (handleApiKeyClick(e, body, () => renderPanel())) return;
+
+      // Log card
+      if (handleLogClick(e, body)) return;
+    });
+
+    makeDraggablePanel(panel, document.getElementById(HEADER_ID));
+  }
+
+  /* ── Rendering ──────────────────────────────────────────────── */
+
+  let _rafId = null;
   function renderPanel() {
-    const body = document.getElementById('tpda-plush-body');
+    if (_rafId) return;
+    _rafId = requestAnimationFrame(() => {
+      _rafId = null;
+      _renderPanelNow();
+    });
+  }
+
+  function _renderPanelNow() {
+    const body = document.getElementById('tpda-war-mgr-body');
     if (!body) return;
 
-    let html = '';
+    const ownOnline = STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn');
+    const enemyOnline = STATE.enemyMembers.filter(m => m.isOnline);
+    const enemyHospital = STATE.enemyMembers.filter(m => m.locationBucket === 'hospital');
+    const enemyAvailable = STATE.enemyMembers.filter(m => m.locationBucket !== 'jail');
 
-    // API key card (common)
-    html += renderApiKeyCard();
+    body.innerHTML = `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">\u2694\uFE0F War Status</div>
+        <div>Own faction: <strong>${escapeHtml(STATE.ownFactionName || 'Unknown')}</strong> (${ownOnline.length} online in Torn)</div>
+        <div>Enemy faction: <strong>${escapeHtml(STATE.enemyFactionName || 'Unknown')}</strong> (${enemyOnline.length} online, ${enemyHospital.length} hospital)</div>
+        <div>Enemy ID: ${escapeHtml(STATE.enemyFactionId || 'Not set')}</div>
+        ${STATE.detectedWarInfo ? `<div style="color:#ffcc00;">
+          ${escapeHtml(STATE.detectedWarInfo.type)}: ${STATE.detectedWarInfo.startsIn > 0
+            ? 'starts in ' + formatSeconds(STATE.detectedWarInfo.startsIn)
+            : 'in progress'}
+        </div>` : ''}
+        <div>Last refresh: ${ageText(STATE.lastFetchTs)}</div>
+      </div>
 
-    // Status bar
-    const fetchAge = STATE.lastFetchAt ? ageText(STATE.lastFetchAt) : 'never';
-    const keyInfo = STATE.apiKey ? `Key: \u2022\u2022\u2022${STATE.apiKey.slice(-4)} (${STATE.apiKeySource})` : 'No API key';
-    html += `<div style="margin-bottom:8px;font-size:11px;color:#888;">`;
-    html += escapeHtml(keyInfo) + ' \u2022 Updated: ' + fetchAge;
-    if (STATE.fetching) html += ` \u2022 Fetching ${STATE.fetchProgress + 1}/${PLUSHIES.length}\u2026`;
-    html += `</div>`;
+      ${renderApiKeyCard()}
 
-    // Price table
-    const rows = getSortedPlushies();
-    const arrow = (col) => STATE.sortCol === col ? (STATE.sortAsc ? ' \u25B2' : ' \u25BC') : '';
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="font-weight:bold;margin-bottom:6px;">Enemy Faction ID</div>
+        <div style="display:flex;gap:8px;">
+          <input id="tpda-mgr-faction-input" type="text" value="${escapeHtml(getManualEnemyFactionId())}" placeholder="Enemy faction ID"
+                 style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
+          <button id="tpda-mgr-save-id" style="background:#444;color:white;border:none;border-radius:8px;padding:8px 10px;">Save</button>
+        </div>
+      </div>
 
-    html += `<div style="overflow-x:auto;"><table class="tpda-plush-table"><thead><tr>`;
-    html += `<th data-col="name">Plushie${arrow('name')}</th>`;
-    html += `<th data-col="floor">Market${arrow('floor')}</th>`;
-    html += `<th data-col="bazaar">Bazaar${arrow('bazaar')}</th>`;
-    html += `<th data-col="best">Best${arrow('best')}</th>`;
-    html += `</tr></thead><tbody>`;
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="font-weight:bold;margin-bottom:6px;">Settings</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+          <label style="font-size:12px;color:#bbb;white-space:nowrap;">Stat threshold:</label>
+          <input id="tpda-mgr-threshold" type="number" min="10" max="100" step="5" value="${STATE.thresholdPct}"
+                 style="width:60px;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:6px;text-align:center;" />
+          <span style="font-size:12px;color:#bbb;">%</span>
+          <span style="font-size:11px;color:#888;">Assign targets at most this % of attacker's estimated stats</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <label style="font-size:12px;color:#bbb;white-space:nowrap;">Refresh rate:</label>
+          <select id="tpda-mgr-poll-select"
+                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:6px;font-size:12px;">
+            ${POLL_INTERVALS.map(p => `<option value="${p.ms}"${p.ms === STATE.pollMs ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
 
-    let totalBest = 0;
-    let allHavePrices = true;
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button id="tpda-mgr-scan" style="background:${STATE.scanning ? '#d64545' : '#4a3d7a'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
+            ${STATE.scanning ? 'Stop Scan' : 'Scan All Stats'}
+          </button>
+          <button id="tpda-mgr-refresh" style="background:#2a6df4;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
+            Refresh Data
+          </button>
+          <span style="font-size:11px;color:#bbb;">
+            ${STATE.scanning
+              ? `Scanning... ${STATE.scanProgress}/${STATE.scanTotal}`
+              : `${Object.keys(STATE.profileCache).length} profiles cached`}
+          </span>
+        </div>
+      </div>
 
-    for (const r of rows) {
-      if (r.best) totalBest += r.best; else allHavePrices = false;
+      ${STATE.lastError ? `
+        <div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">
+          ${escapeHtml(STATE.lastError)}
+        </div>
+      ` : ''}
 
-      /* Highlight the source that provides the best price */
-      const floorIsBest = r.floor && r.best && r.floor === r.best;
-      const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
-      const marketUrl = `https://www.torn.com/imarket.php#/p=shop&step=shop&type=&searchname=${encodeURIComponent(r.name)}`;
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:bold;">\uD83C\uDFAF Target Assignments (${STATE.assignments.length})</div>
+          <div style="display:flex;gap:6px;">
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateCompactMessages())}"
+                    style="font-size:11px;background:#4a3d7a;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy Compact
+            </button>
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateAssignmentMessages())}"
+                    style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy Detailed
+            </button>
+          </div>
+        </div>
+        ${renderAssignments()}
+      </div>
 
-      const priceLink = (val, cls) => {
-        const text = formatMoney(val);
-        if (!val) return `<td${cls ? ` class="${cls}"` : ''}>${text}</td>`;
-        return `<td${cls ? ` class="${cls}"` : ''}><a class="tpda-price-link" href="${escapeHtml(marketUrl)}" target="_blank" rel="noopener">${text}</a></td>`;
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">Own Faction — Online in Torn (${ownOnline.length})</div>
+        ${renderMemberRows(ownOnline, 'mgr-own')}
+      </div>
+
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">Enemy — Available Targets (${enemyAvailable.length})</div>
+        ${renderMemberRows(enemyAvailable, 'mgr-enemy')}
+      </div>
+
+      ${renderLogCard()}
+    `;
+
+    // Attach handlers
+    const saveIdBtn = document.getElementById('tpda-mgr-save-id');
+    if (saveIdBtn) {
+      saveIdBtn.onclick = async () => {
+        const input = document.getElementById('tpda-mgr-faction-input');
+        const val = String(input?.value || '').trim();
+        setManualEnemyFactionId(val);
+        STATE.enemyFactionId = val || null;
+        addLog('Enemy faction ID saved: ' + val);
+        await refreshAll();
       };
-
-      html += `<tr>`;
-      html += `<td>${escapeHtml(r.name)}</td>`;
-      html += priceLink(r.floor, floorIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.bazaar, bazaarIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.best, 'tpda-plush-best');
-      html += `</tr>`;
     }
 
-    html += `<tr class="total-row">`;
-    html += `<td>Full Set (13)</td><td></td><td></td>`;
-    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalBest) : '\u2014'}</td>`;
-    html += `</tr></tbody></table></div>`;
-
-    // Debug log (common)
-    html += renderLogCard();
-
-    body.innerHTML = html;
-
-    // Wire up: sort headers
-    body.querySelectorAll('.tpda-plush-table th[data-col]').forEach(th => {
-      th.onclick = () => {
-        const col = th.dataset.col;
-        if (STATE.sortCol === col) STATE.sortAsc = !STATE.sortAsc;
-        else { STATE.sortCol = col; STATE.sortAsc = true; }
+    const thresholdInput = document.getElementById('tpda-mgr-threshold');
+    if (thresholdInput) {
+      thresholdInput.onchange = () => {
+        const val = Math.max(10, Math.min(100, Number(thresholdInput.value) || DEFAULT_THRESHOLD_PCT));
+        STATE.thresholdPct = val;
+        saveThresholdPct(val);
+        computeAssignments();
         renderPanel();
       };
-    });
+    }
+
+    const pollSelect = document.getElementById('tpda-mgr-poll-select');
+    if (pollSelect) {
+      pollSelect.onchange = () => {
+        const ms = Number(pollSelect.value);
+        STATE.pollMs = ms;
+        savePollMs(ms);
+        restartPolling();
+      };
+    }
+
+    const scanBtn = document.getElementById('tpda-mgr-scan');
+    if (scanBtn) {
+      scanBtn.onclick = () => scanAllStats();
+    }
+
+    const refreshBtn = document.getElementById('tpda-mgr-refresh');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => refreshAll();
+    }
   }
 
-  /* ── resize handler ────────────────────────────────────────── */
-  /* ── init ───────────────────────────────────────────────────── */
-  function init() {
+  function renderAssignments() {
+    if (!STATE.assignments.length) {
+      return '<div class="mgr-muted">No assignments yet. Scan stats and refresh data to generate target assignments.</div>';
+    }
+
+    return STATE.assignments.map(({ own, enemy }) => {
+      const ownEst = own.estimate ? ` <span style="color:${own.estimate.color};font-size:11px;">[${escapeHtml(own.estimate.label)}]</span>` : '';
+      const enemyEst = enemy.estimate ? ` <span style="color:${enemy.estimate.color};font-size:11px;">[${escapeHtml(enemy.estimate.label)}]</span>` : '';
+
+      let hospNote = '';
+      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
+        hospNote = `<div style="font-size:11px;color:#ffd166;">\u23F0 Out of hospital in ${formatSeconds(enemy.remainingSec)}</div>`;
+      }
+
+      const enemyStatus = enemy.isOnline
+        ? '<span style="color:#4caf50;">Online</span>'
+        : `<span style="color:#888;">Last action: ${escapeHtml(enemy.relative)}</span>`;
+
+      return `
+        <div class="mgr-assign">
+          <div>
+            <span class="mgr-own"><strong>${escapeHtml(own.name)}</strong></span>${ownEst}
+            <span style="color:#bbb;"> \u2192 </span>
+            <span class="mgr-enemy"><strong>${escapeHtml(enemy.name)}</strong></span>${enemyEst}
+          </div>
+          <div style="font-size:11px;color:#bbb;">
+            ${enemyStatus} \u2022 ${escapeHtml(enemy.locationLabel)}
+          </div>
+          ${hospNote}
+          <div style="margin-top:4px;display:flex;gap:6px;">
+            <a href="${escapeHtml(attackUrl(enemy.id))}" target="_blank" rel="noopener"
+               style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">
+              Attack
+            </a>
+            <a href="${escapeHtml(profileUrl(enemy.id))}" target="_blank" rel="noopener"
+               style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">
+              Profile
+            </a>
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(`${own.name} \u2192 ${enemy.name} ${enemy.estimate ? '[' + enemy.estimate.label + ']' : ''} ${profileUrl(enemy.id)}${enemy.locationBucket === 'hospital' && enemy.remainingSec != null ? ' (hospital, out in ' + formatSeconds(enemy.remainingSec) + ')' : ''}`)}"
+                    style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderMemberRows(list, cls) {
+    if (!list.length) return '<div class="mgr-muted">None</div>';
+    const maxShow = 20;
+    const visible = list.slice(0, maxShow);
+    const hidden = list.length - visible.length;
+
+    return visible.map(m => {
+      const profile = STATE.profileCache[m.id];
+      const est = profile?.estimate;
+      let hospNote = '';
+      if (m.locationBucket === 'hospital' && m.remainingSec != null) {
+        hospNote = ` <span style="color:#ffd166;font-size:11px;">\u23F0 ${formatSeconds(m.remainingSec)}</span>`;
+      }
+      return `
+        <div style="padding:4px 0;border-top:1px solid #2a2d38;font-size:12px;">
+          <span class="${cls}"><strong>${escapeHtml(m.name)}</strong></span>
+          ${m.level ? ` Lv${escapeHtml(m.level)}` : ''}
+          ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
+          <span style="color:#888;">\u2022 ${m.isOnline ? 'Online' : escapeHtml(m.relative)} \u2022 ${escapeHtml(m.locationLabel)}</span>
+          ${hospNote}
+        </div>
+      `;
+    }).join('') + (hidden > 0 ? `<div class="mgr-muted">+ ${hidden} more</div>` : '');
+  }
+
+  /* ── Polling ────────────────────────────────────────────────── */
+
+  function startPolling() {
+    if (STATE.pollTimerId) clearInterval(STATE.pollTimerId);
+    STATE.pollTimerId = setInterval(async () => {
+      if (STATE.ui.minimized) return;
+      if (!STATE.apiKey) return;
+      if (!STATE.enemyFactionId) {
+        await detectEnemyFaction();
+        if (STATE.enemyFactionId) renderPanel();
+      }
+      if (!STATE.enemyFactionId) return;
+      await refreshAll();
+      addLog('Poll cycle completed');
+    }, STATE.pollMs);
+  }
+
+  function restartPolling() {
+    startPolling();
+  }
+
+  /* ── Init ───────────────────────────────────────────────────── */
+
+  async function init() {
     initApiKey(PDA_INJECTED_KEY);
-    loadCachedPrices();
+    STATE.profileCache = loadProfileCache();
+
     ensureStyles();
     createBubble();
     createPanel();
+    await detectEnemyFaction();
     window.addEventListener('resize', onResize);
-    addLog('Plushie Prices initialized');
-    console.log('[Plushie Prices] Started.');
+    startPolling();
+    console.log('[War Manager Bubble] Started.');
+    addLog('War Manager initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
+    if (STATE.enemyFactionId && STATE.apiKey) {
+      await refreshAll();
+    }
   }
 
-  // Install network hooks immediately so we capture API keys from PDA traffic
   hookFetch();
   hookXHR();
 
-  setTimeout(init, 1200);
+  setTimeout(init, 1500);
 })();
