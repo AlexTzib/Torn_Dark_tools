@@ -1346,7 +1346,7 @@
       const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
       const marketUrl = `https://www.torn.com/page.php?sid=ItemMarket#/market/view=search&itemID=${r.id}`;
       const bazaarUrl = r.bazaarSellerId
-        ? `https://www.torn.com/bazaar.php#/p=shop&userID=${r.bazaarSellerId}`
+        ? `https://www.torn.com/bazaar.php?userId=${r.bazaarSellerId}#/`
         : marketUrl;
       const bestUrl = bazaarIsBest ? bazaarUrl : marketUrl;
 
