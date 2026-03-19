@@ -320,10 +320,6 @@
           fetchMarketData(p.id),
           fetchBazaarData(p.id)
         ]);
-        const best = Math.min(
-          market.floor ?? Infinity,
-          bazaar.bazaarFloor ?? Infinity
-        );
         STATE.prices[p.id] = {
           floor: market.floor,
           avg: market.avg,
@@ -332,10 +328,9 @@
           bazaarAvg: bazaar.bazaarAvg,
           bazaarCount: bazaar.bazaarCount,
           bazaarSellerId: bazaar.bazaarSellerId,
-          best: best === Infinity ? null : best,
           fetchedAt: nowTs()
         };
-        addLog(`${p.name}: market=${formatMoney(market.floor)} bazaar=${formatMoney(bazaar.bazaarFloor)} best=${formatMoney(best === Infinity ? null : best)}`);
+        addLog(`${p.name}: market=${formatMoney(market.floor)} bazaar=${formatMoney(bazaar.bazaarFloor)} value=${formatMoney(market.avg)}`);
       } catch (err) {
         addLog(`ERROR fetching ${p.name}: ${err.message}`);
       }
@@ -358,9 +353,9 @@
       const d = STATE.prices[p.id] || {};
       const floor = d.floor || null;
       const bazaar = d.bazaarFloor || null;
-      const best = d.best || null;
+      const value = d.avg || null;
       const bazaarSellerId = d.bazaarSellerId || null;
-      return { ...p, floor, bazaar, best, bazaarSellerId };
+      return { ...p, floor, bazaar, value, bazaarSellerId };
     });
 
     const col = STATE.sortCol;
@@ -399,23 +394,19 @@
     html += `<th data-col="name">Plushie${arrow('name')}</th>`;
     html += `<th data-col="floor">Market${arrow('floor')}</th>`;
     html += `<th data-col="bazaar">Bazaar${arrow('bazaar')}</th>`;
-    html += `<th data-col="best">Best${arrow('best')}</th>`;
+    html += `<th data-col="value">Value${arrow('value')}</th>`;
     html += `</tr></thead><tbody>`;
 
-    let totalBest = 0;
+    let totalValue = 0;
     let allHavePrices = true;
 
     for (const r of rows) {
-      if (r.best) totalBest += r.best; else allHavePrices = false;
+      if (r.value) totalValue += r.value; else allHavePrices = false;
 
-      /* Highlight the source that provides the best price */
-      const floorIsBest = r.floor && r.best && r.floor === r.best;
-      const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
       const marketUrl = `https://www.torn.com/page.php?sid=ItemMarket#/market/view=search&itemID=${r.id}`;
       const bazaarUrl = r.bazaarSellerId
         ? `https://www.torn.com/bazaar.php?userId=${r.bazaarSellerId}#/`
         : marketUrl;
-      const bestUrl = bazaarIsBest ? bazaarUrl : marketUrl;
 
       const priceLink = (val, url, cls) => {
         const text = formatMoney(val);
@@ -425,15 +416,15 @@
 
       html += `<tr>`;
       html += `<td>${escapeHtml(r.name)}</td>`;
-      html += priceLink(r.floor, marketUrl, floorIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.bazaar, bazaarUrl, bazaarIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.best, bestUrl, 'tpda-plush-best');
+      html += priceLink(r.floor, marketUrl, '');
+      html += priceLink(r.bazaar, bazaarUrl, '');
+      html += priceLink(r.value, marketUrl, '');
       html += `</tr>`;
     }
 
     html += `<tr class="total-row">`;
     html += `<td>Full Set (13)</td><td></td><td></td>`;
-    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalBest) : '\u2014'}</td>`;
+    html += `<td>${allHavePrices ? formatMoney(totalValue) : '\u2014'}</td>`;
     html += `</tr></tbody></table></div>`;
 
     // Debug log (common)
