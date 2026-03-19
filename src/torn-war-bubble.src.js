@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.4.0
+// @version      3.4.1
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -633,11 +633,20 @@
     }
 
     if (/traveling|travelling|in flight|flying|returning/.test(combined)) {
-      return { bucket: 'traveling', label: 'In flight' };
+      const desc = String(statusDesc || '').trim();
+      let label = 'In flight';
+      if (/traveling to|travelling to/i.test(desc)) label = desc;
+      else if (/returning/i.test(desc)) label = desc;
+      else if (member?.travel?.destination) label = 'Flying to ' + member.travel.destination;
+      return { bucket: 'traveling', label };
     }
 
     if (/abroad|mexico|canada|argentina|hawaii|cayman|switzerland|japan|china|uae|united arab emirates|south africa|uk|united kingdom/.test(combined)) {
-      return { bucket: 'abroad', label: 'Abroad' };
+      const desc = String(statusDesc || '').trim();
+      let label = 'Abroad';
+      if (/^in\s/i.test(desc)) label = desc;
+      else if (member?.travel?.destination) label = 'In ' + member.travel.destination;
+      return { bucket: 'abroad', label };
     }
 
     if (/\bokay\b|\bin torn\b/.test(combined)) {
