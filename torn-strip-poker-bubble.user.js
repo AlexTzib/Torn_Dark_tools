@@ -7,6 +7,8 @@
 // @match        https://www.torn.com/*
 // @grant        none
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-strip-poker-bubble.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-strip-poker-bubble.user.js
 // ==/UserScript==
 
 (function () {

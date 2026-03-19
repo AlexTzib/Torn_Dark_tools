@@ -7,6 +7,8 @@
 // @match        https://www.torn.com/*
 // @grant        none
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-war-manager.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-war-manager.user.js
 // ==/UserScript==
 
 (function () {
@@ -1015,7 +1017,8 @@
       });
       addLog(`Own faction: ${STATE.ownMembers.length} members loaded`);
     } catch (err) {
-      addLog('Error fetching own faction: ' + (err?.message || err));
+      STATE.lastError = 'Error fetching own faction: ' + (err?.message || err);
+      addLog(STATE.lastError);
     }
   }
 
@@ -1235,12 +1238,19 @@
   /* ── UI ─────────────────────────────────────────────────────── */
 
   function onPanelExpand() {
-    if (STATE.apiKey && !STATE.ownFactionId) {
-      refreshAll();
-    }
+    if (!STATE.apiKey) return;
+    // Always refresh on open; detectEnemyFaction is cheap if already set
+    if (!STATE.enemyFactionId) detectEnemyFaction();
+    refreshAll();
   }
 
-  function onPanelCollapse() {}
+  function onPanelCollapse() {
+    // Cancel any running scan to save API calls while minimized
+    if (STATE.scanning) {
+      STATE.scanning = false;
+      addLog('Scan cancelled (panel closed)');
+    }
+  }
 
   function ensureStyles() {
     if (document.getElementById('tpda-war-mgr-styles')) return;
@@ -1251,16 +1261,16 @@
         position: fixed;
         width: ${BUBBLE_SIZE}px; height: ${BUBBLE_SIZE}px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #4a3d7a, #7b2ff7);
+        background: linear-gradient(135deg, #e67e22, #b35900);
         color: white;
         display: flex; align-items: center; justify-content: center;
         font-weight: bold; font-size: 11px;
         cursor: pointer; user-select: none;
-        box-shadow: 0 2px 12px rgba(123,47,247,0.35);
+        box-shadow: 0 2px 12px rgba(230,126,34,0.35);
         z-index: 999960;
         transition: box-shadow 0.2s;
       }
-      #${BUBBLE_ID}:hover { box-shadow: 0 4px 20px rgba(123,47,247,0.6); }
+      #${BUBBLE_ID}:hover { box-shadow: 0 4px 20px rgba(230,126,34,0.6); }
 
       #${PANEL_ID} {
         position: fixed;
@@ -1374,6 +1384,23 @@
     const enemyAvailable = STATE.enemyMembers.filter(m => m.locationBucket !== 'jail');
 
     body.innerHTML = `
+      ${renderWarStatusCard(ownOnline, enemyOnline, enemyHospital)}
+      ${renderApiKeyCard()}
+      ${renderFactionIdCard()}
+      ${renderSettingsCard()}
+      ${renderActionBar()}
+      ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
+      ${renderAssignmentsCard()}
+      ${renderFactionList('Own Faction \u2014 Online in Torn', ownOnline, 'mgr-own')}
+      ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy')}
+      ${renderLogCard()}
+    `;
+
+    attachPanelHandlers();
+  }
+
+  function renderWarStatusCard(ownOnline, enemyOnline, enemyHospital) {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">\u2694\uFE0F War Status</div>
         <div>Own faction: <strong>${escapeHtml(STATE.ownFactionName || 'Unknown')}</strong> (${ownOnline.length} online in Torn)</div>
@@ -1385,10 +1412,11 @@
             : 'in progress'}
         </div>` : ''}
         <div>Last refresh: ${ageText(STATE.lastFetchTs)}</div>
-      </div>
+      </div>`;
+  }
 
-      ${renderApiKeyCard()}
-
+  function renderFactionIdCard() {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="font-weight:bold;margin-bottom:6px;">Enemy Faction ID</div>
         <div style="display:flex;gap:8px;">
@@ -1396,8 +1424,11 @@
                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
           <button id="tpda-mgr-save-id" style="background:#444;color:white;border:none;border-radius:8px;padding:8px 10px;">Save</button>
         </div>
-      </div>
+      </div>`;
+  }
 
+  function renderSettingsCard() {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="font-weight:bold;margin-bottom:6px;">Settings</div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
@@ -1414,11 +1445,14 @@
             ${POLL_INTERVALS.map(p => `<option value="${p.ms}"${p.ms === STATE.pollMs ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
           </select>
         </div>
-      </div>
+      </div>`;
+  }
 
+  function renderActionBar() {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button id="tpda-mgr-scan" style="background:${STATE.scanning ? '#d64545' : '#4a3d7a'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
+          <button id="tpda-mgr-scan" style="background:${STATE.scanning ? '#d64545' : '#e67e22'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
             ${STATE.scanning ? 'Stop Scan' : 'Scan All Stats'}
           </button>
           <button id="tpda-mgr-refresh" style="background:#2a6df4;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
@@ -1430,20 +1464,17 @@
               : `${Object.keys(STATE.profileCache).length} profiles cached`}
           </span>
         </div>
-      </div>
+      </div>`;
+  }
 
-      ${STATE.lastError ? `
-        <div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">
-          ${escapeHtml(STATE.lastError)}
-        </div>
-      ` : ''}
-
+  function renderAssignmentsCard() {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div style="font-weight:bold;">\uD83C\uDFAF Target Assignments (${STATE.assignments.length})</div>
           <div style="display:flex;gap:6px;">
             <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateCompactMessages())}"
-                    style="font-size:11px;background:#4a3d7a;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+                    style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy Compact
             </button>
             <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateAssignmentMessages())}"
@@ -1453,22 +1484,18 @@
           </div>
         </div>
         ${renderAssignments()}
-      </div>
+      </div>`;
+  }
 
+  function renderFactionList(title, list, cls) {
+    return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Own Faction — Online in Torn (${ownOnline.length})</div>
-        ${renderMemberRows(ownOnline, 'mgr-own')}
-      </div>
+        <div style="font-weight:bold;margin-bottom:6px;">${escapeHtml(title)} (${list.length})</div>
+        ${renderMemberRows(list, cls)}
+      </div>`;
+  }
 
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Enemy — Available Targets (${enemyAvailable.length})</div>
-        ${renderMemberRows(enemyAvailable, 'mgr-enemy')}
-      </div>
-
-      ${renderLogCard()}
-    `;
-
-    // Attach handlers
+  function attachPanelHandlers() {
     const saveIdBtn = document.getElementById('tpda-mgr-save-id');
     if (saveIdBtn) {
       saveIdBtn.onclick = async () => {
@@ -1503,14 +1530,10 @@
     }
 
     const scanBtn = document.getElementById('tpda-mgr-scan');
-    if (scanBtn) {
-      scanBtn.onclick = () => scanAllStats();
-    }
+    if (scanBtn) scanBtn.onclick = () => scanAllStats();
 
     const refreshBtn = document.getElementById('tpda-mgr-refresh');
-    if (refreshBtn) {
-      refreshBtn.onclick = () => refreshAll();
-    }
+    if (refreshBtn) refreshBtn.onclick = () => refreshAll();
   }
 
   function renderAssignments() {

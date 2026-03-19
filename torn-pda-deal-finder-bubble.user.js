@@ -8,6 +8,8 @@
 // @connect      weav3r.dev
 // @grant        none
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-pda-deal-finder-bubble.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTzib/Torn_Dark_tools/main/torn-pda-deal-finder-bubble.user.js
 // ==/UserScript==
 
 (function () {
