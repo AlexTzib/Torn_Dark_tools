@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.1.0
-// @description  Fetches and compares bazaar vs item market prices for all 13 Torn plushies. Shows a sortable table with floor prices and set costs.
+// @version      2.2.0
+// @description  Fetches item market floor and average prices for all 13 Torn plushies. Shows a sortable table with floor prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -309,7 +309,7 @@
       <div id="${HEADER_ID}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1c1d24;border-bottom:1px solid #333;flex:0 0 auto;">
         <div>
           <div style="font-weight:bold;">\uD83E\uDDF8 Plushie Prices</div>
-          <div style="font-size:11px;color:#bbb;">Bazaar vs Item Market</div>
+          <div style="font-size:11px;color:#bbb;">Item Market Floor &amp; Avg</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;">
           <button id="tpda-plush-refresh" style="background:#9b59b6;color:white;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;">Refresh</button>
@@ -498,19 +498,18 @@
 
   async function fetchMarketData(itemId) {
     if (!STATE.apiKey) throw new Error('No API key');
-    const url = `https://api.torn.com/v2/market/${itemId}?selections=bazaar,itemmarket&key=${STATE.apiKey}`;
+    const url = `https://api.torn.com/v2/market/${itemId}/itemmarket?key=${STATE.apiKey}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.error}`);
-    /* v2 returns { bazaar: { listings: [{price, amount}, ...] }, itemmarket: { listings: [{price, amount}, ...] } }
-       v1 used flat arrays with {cost, quantity} — normalize both to {cost, quantity} for downstream compat */
-    const bazaarRaw = data.bazaar;
-    const marketRaw = data.itemmarket;
-    const bazaarArr = Array.isArray(bazaarRaw) ? bazaarRaw : (bazaarRaw?.listings || []);
-    const marketArr = Array.isArray(marketRaw) ? marketRaw : (marketRaw?.listings || []);
+    /* v2 /market/{id}/itemmarket returns:
+       { itemmarket: { item: { id, name, type, average_price }, listings: [{price, amount}, ...], cache_timestamp }, _metadata } */
+    const im = data.itemmarket || {};
+    const listings = im.listings || [];
     return {
-      bazaar:     bazaarArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.amount ?? e.quantity })),
-      itemmarket: marketArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.amount ?? e.quantity }))
+      floor: listings.length ? listings[0].price : null,
+      avg: im.item?.average_price ?? null,
+      count: listings.length
     };
   }
 
@@ -532,16 +531,13 @@
       STATE.fetchProgress = i;
       try {
         const data = await fetchMarketData(p.id);
-        const bazaarArr = data.bazaar || [];
-        const marketArr = data.itemmarket || [];
         STATE.prices[p.id] = {
-          bazaarFloor: bazaarArr.length ? bazaarArr[0].cost : null,
-          marketFloor: marketArr.length ? marketArr[0].cost : null,
-          bazaarCount: bazaarArr.length,
-          marketCount: marketArr.length,
+          floor: data.floor,
+          avg: data.avg,
+          listingCount: data.count,
           fetchedAt: nowTs()
         };
-        addLog(`${p.name}: bazaar=${formatMoney(STATE.prices[p.id].bazaarFloor)} market=${formatMoney(STATE.prices[p.id].marketFloor)}`);
+        addLog(`${p.name}: floor=${formatMoney(data.floor)} avg=${formatMoney(data.avg)} (${data.count} listings)`);
       } catch (err) {
         addLog(`ERROR fetching ${p.name}: ${err.message}`);
       }
@@ -562,10 +558,9 @@
   function getSortedPlushies() {
     const rows = PLUSHIES.map(p => {
       const d = STATE.prices[p.id] || {};
-      const bazaar = d.bazaarFloor || null;
-      const market = d.marketFloor || null;
-      const best = bazaar && market ? Math.min(bazaar, market) : (bazaar || market || null);
-      return { ...p, bazaar, market, best };
+      const floor = d.floor || null;
+      const avg = d.avg || null;
+      return { ...p, floor, avg };
     });
 
     const col = STATE.sortCol;
@@ -613,33 +608,26 @@
 
     html += `<div style="overflow-x:auto;"><table class="tpda-plush-table"><thead><tr>`;
     html += `<th data-col="name">Plushie${arrow('name')}</th>`;
-    html += `<th data-col="bazaar">Bazaar${arrow('bazaar')}</th>`;
-    html += `<th data-col="market">Market${arrow('market')}</th>`;
-    html += `<th data-col="best">Best${arrow('best')}</th>`;
+    html += `<th data-col="floor">Floor${arrow('floor')}</th>`;
+    html += `<th data-col="avg">Avg${arrow('avg')}</th>`;
     html += `</tr></thead><tbody>`;
 
-    let totalBest = 0;
+    let totalFloor = 0;
     let allHavePrices = true;
 
     for (const r of rows) {
-      const isBazaarBest = r.bazaar && r.market && r.bazaar <= r.market;
-      const isMarketBest = r.market && r.bazaar && r.market <= r.bazaar;
-      const bazaarCls = (isBazaarBest || (r.bazaar && !r.market)) ? ' class="tpda-plush-best"' : '';
-      const marketCls = (isMarketBest || (r.market && !r.bazaar)) ? ' class="tpda-plush-best"' : '';
-
-      if (r.best) totalBest += r.best; else allHavePrices = false;
+      if (r.floor) totalFloor += r.floor; else allHavePrices = false;
 
       html += `<tr>`;
       html += `<td>${escapeHtml(r.name)}</td>`;
-      html += `<td${bazaarCls}>${formatMoney(r.bazaar)}</td>`;
-      html += `<td${marketCls}>${formatMoney(r.market)}</td>`;
-      html += `<td class="tpda-plush-best">${formatMoney(r.best)}</td>`;
+      html += `<td class="tpda-plush-best">${formatMoney(r.floor)}</td>`;
+      html += `<td>${formatMoney(r.avg)}</td>`;
       html += `</tr>`;
     }
 
     html += `<tr class="total-row">`;
-    html += `<td>Full Set (13)</td><td></td><td></td>`;
-    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalBest) : '\u2014'}</td>`;
+    html += `<td>Full Set (13)</td><td></td>`;
+    html += `<td class="tpda-plush-best">${allHavePrices ? formatMoney(totalFloor) : '\u2014'}</td>`;
     html += `</tr></tbody></table></div>`;
 
     // Debug log

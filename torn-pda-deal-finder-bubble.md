@@ -63,12 +63,14 @@ The cheapest source for each plushie is highlighted. A "Full Set (13)" row at th
 
 ### API Calls
 
-The script makes **13 API calls** per refresh (one per plushie), each fetching both bazaar and item market listings via the **v2 API**:
+The script makes **13 API calls** per refresh (one per plushie), each fetching item market listings via the **v2 API**:
 ```
-GET https://api.torn.com/v2/market/{plushie_id}?selections=bazaar,itemmarket&key={key}
+GET https://api.torn.com/v2/market/{plushie_id}/itemmarket?key={key}
 ```
 
-The v2 response wraps listings in `{ listings: [{price, quantity}, ...] }` objects (v1 used flat arrays with `.cost`). The script normalizes both formats internally.
+The v2 response returns `{ itemmarket: { item: { average_price }, listings: [{ price, amount }] } }`. The script extracts the floor price (cheapest listing) and the average price.
+
+> **Note:** The v1 `bazaar` selection (player bazaar price listings) has no equivalent in v2 — the v2 `bazaar` endpoint returns a bazaar directory, not item prices. Only item market data is available per-item in v2.
 
 Calls are made sequentially with a 250ms delay between them to stay well within Torn's rate limit (~100 requests/minute). A full refresh takes approximately 3-4 seconds.
 
@@ -94,8 +96,7 @@ Calls are made sequentially with a 250ms delay between them to stay well within 
 
 || Source | Method | Notes |
 ||---|---|---|
-|| Plushie bazaar prices | API v2 fetch (`v2/market/{id}?selections=bazaar`) | Returns `{ listings: [{price, quantity}] }`; script takes floor from first listing |
-|| Plushie item market prices | API v2 fetch (`v2/market/{id}?selections=itemmarket`) | Same approach — floor from first listing |
+|| Plushie item market prices | API v2 fetch (`v2/market/{id}/itemmarket`) | Returns `{ itemmarket: { listings: [{price, amount}], item: {average_price} } }`; floor from first listing |
 || API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance
