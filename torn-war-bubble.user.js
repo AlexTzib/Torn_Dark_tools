@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.1.0
+// @version      3.1.1
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -1199,7 +1199,7 @@
   }
 
   function renderSection(key, title, list, cls) {
-    const collapsed = STATE.collapsed[key] || false;
+    const collapsed = (STATE.collapsed[key] !== undefined) ? STATE.collapsed[key] : true;
     const arrow = collapsed ? '\u25B6' : '\u25BC';
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
