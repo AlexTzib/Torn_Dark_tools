@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Strip Poker Advisor
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      2.0.0
+// @version      2.0.1
 // @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1169,6 +1169,20 @@
            /poker.*action/i.test(url);
   }
 
+  /* We intercept ALL torn.com requests and try to parse any JSON response
+     for card data. This catches unknown URL patterns (Torn changes endpoints). */
+  function isTornPageUrl(url) {
+    return /torn\.com\//i.test(url) && !/api\.torn\.com/i.test(url);
+  }
+
+  function tryHandleResponse(data, url) {
+    try {
+      if (!data || typeof data !== 'object') return;
+      handlePokerPayload(data);
+      if (isPokerUrl(url)) addLog(`Poker URL hit: ${url.slice(0, 80)}`);
+    } catch {}
+  }
+
   function hookFetch() {
     const originalFetch = window.fetch;
     if (!originalFetch) return;
@@ -1176,9 +1190,10 @@
       try {
         const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
         if (url.includes('api.torn.com/')) extractApiKeyFromUrl(url);
-        if (isPokerUrl(url)) {
+        /* Intercept all torn.com page requests, not just poker-matching URLs */
+        if (isTornPageUrl(url) || isPokerUrl(url)) {
           const resp = await originalFetch.apply(this, args);
-          try { resp.clone().json().then(d => handlePokerPayload(d)).catch(() => {}); } catch {}
+          try { resp.clone().json().then(d => tryHandleResponse(d, url)).catch(() => {}); } catch {}
           return resp;
         }
       } catch {}
@@ -1199,11 +1214,12 @@
     };
     XMLHttpRequest.prototype.send = function (...args) {
       const u = this._tpdaPokerUrl || '';
-      if (u && isPokerUrl(u)) {
+      /* Intercept all torn.com requests */
+      if (u && (isTornPageUrl(u) || isPokerUrl(u))) {
         this.addEventListener('load', function () {
           try {
             const d = JSON.parse(this.responseText);
-            handlePokerPayload(d);
+            tryHandleResponse(d, u);
           } catch {}
         });
       }
@@ -1882,8 +1898,8 @@
     createPanel();
     startCardObserver();
     window.addEventListener('resize', onResize);
-    addLog('Strip Poker Advisor v1.1.0 initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
-    console.log('[Strip Poker Advisor] v1.1.0 Started.');
+    addLog('Strip Poker Advisor v2.0.1 initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
+    console.log('[Strip Poker Advisor] v2.0.1 Started.');
   }
 
   /* Install network hooks immediately (before DOM is ready) so we catch early game data */

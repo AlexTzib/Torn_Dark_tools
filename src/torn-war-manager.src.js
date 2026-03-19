@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.2.1
-// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, generates copy-paste messages
+// @version      1.3.0
+// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
@@ -234,10 +234,15 @@
 
   /* ── Target assignment algorithm ───────────────────────────── */
 
+  /* Stat midpoints are community-sourced approximations.
+     Multiply by 0.7 to be conservative — better to assign slightly
+     weaker targets than ones that are too strong. */
+  const STAT_SAFETY_FACTOR = 0.7;
+
   function enrichWithStats(members) {
     return members.map(m => {
       const p = STATE.profileCache[m.id];
-      return { ...m, estimate: p?.estimate || null, midpoint: p ? rankToMidpoint(p.rank) : 0 };
+      return { ...m, estimate: p?.estimate || null, midpoint: p ? Math.round(rankToMidpoint(p.rank) * STAT_SAFETY_FACTOR) : 0 };
     });
   }
 
@@ -534,6 +539,7 @@
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
       ${renderMemberSelector(ownOnline)}
       ${renderSelectedTargetList()}
+      ${renderOnlineEnemyReport(enemyOnline)}
       ${renderAssignmentsCard()}
       ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy')}
       ${renderLogCard()}
@@ -710,6 +716,81 @@
           </div>
         </div>
         ${renderAssignments()}
+      </div>`;
+  }
+
+  function generateOnlineReport(enemies) {
+    return enemies.map(e => {
+      const est = STATE.profileCache[e.id]?.estimate;
+      const tag = est ? ` [${est.label}]` : '';
+      return `${e.name}${tag} Lv${e.level || '?'} — ${attackUrl(e.id)}`;
+    }).join('\n');
+  }
+
+  function renderOnlineEnemyReport(enemyOnline) {
+    if (!enemyOnline.length) {
+      return `
+        <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+          <div style="font-weight:bold;margin-bottom:6px;">\uD83D\uDFE2 Enemy Online Report</div>
+          <div class="mgr-muted">No enemy members currently online.</div>
+        </div>`;
+    }
+
+    const enriched = enrichWithStats(enemyOnline).sort((a, b) => a.midpoint - b.midpoint);
+    const inTorn = enriched.filter(e => e.locationBucket === 'torn');
+    const abroad = enriched.filter(e => e.locationBucket === 'abroad' || e.locationBucket === 'traveling');
+    const other = enriched.filter(e => e.locationBucket !== 'torn' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling');
+
+    function renderRow(e) {
+      const est = e.estimate;
+      let hospNote = '';
+      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
+        hospNote = ` <span style="color:#ffd166;font-size:11px;">\u23F0 ${formatSeconds(e.remainingSec)}</span>`;
+      }
+      return `
+        <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+          <div>
+            <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
+            ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
+            ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
+            <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
+            ${hospNote}
+          </div>
+          <div style="display:flex;gap:4px;">
+            <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
+               style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Attack</a>
+            <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
+               style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Profile</a>
+          </div>
+        </div>`;
+    }
+
+    let rows = '';
+    if (inTorn.length) {
+      rows += `<div style="font-size:11px;color:#4caf50;font-weight:bold;margin:6px 0 2px;">In Torn (${inTorn.length})</div>`;
+      rows += inTorn.map(renderRow).join('');
+    }
+    if (other.length) {
+      rows += `<div style="font-size:11px;color:#ffc107;font-weight:bold;margin:6px 0 2px;">Hospital / Other (${other.length})</div>`;
+      rows += other.map(renderRow).join('');
+    }
+    if (abroad.length) {
+      rows += `<div style="font-size:11px;color:#42a5f5;font-weight:bold;margin:6px 0 2px;">Abroad / Traveling (${abroad.length})</div>`;
+      rows += abroad.map(renderRow).join('');
+    }
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Online Report (${enemyOnline.length})</div>
+          <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateOnlineReport(enemyOnline))}"
+                  style="font-size:11px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+            Copy List
+          </button>
+        </div>
+        <div style="max-height:250px;overflow-y:auto;">
+          ${rows}
+        </div>
       </div>`;
   }
 
