@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.1.0
+// @version      1.2.0
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -29,7 +29,7 @@
     { label: '10 min', ms: 600000 }
   ];
   const DEFAULT_POLL_MS = 120000;
-  const DEFAULT_THRESHOLD_PCT = 70;
+  const DEFAULT_THRESHOLD_PCT = 120;
 
   const STATE = {
     apiKey: null,
@@ -965,7 +965,7 @@
 
   function loadThresholdPct() {
     const saved = getStorage(`${SCRIPT_KEY}_threshold_pct`, DEFAULT_THRESHOLD_PCT);
-    return Math.max(10, Math.min(100, Number(saved) || DEFAULT_THRESHOLD_PCT));
+    return Math.max(10, Math.min(200, Number(saved) || DEFAULT_THRESHOLD_PCT));
   }
 
   function saveThresholdPct(pct) {
@@ -1169,32 +1169,45 @@
   function computeAssignments() {
     const pct = STATE.thresholdPct / 100;
 
+    // Include all online own members in Torn; those without estimates get midpoint 0
     const ownAvailable = enrichWithStats(
       STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn')
-    ).filter(m => m.estimate)
-     .sort((a, b) => b.midpoint - a.midpoint);
+    ).sort((a, b) => b.midpoint - a.midpoint);
 
-    const enemies = sortEnemiesByPriority(
+    // Include all enemies not in jail; those without estimates still appear
+    const allEnemies = sortEnemiesByPriority(
       enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
-        .filter(m => m.estimate)
     );
 
     const assigned = new Set();
     const assignments = [];
 
+    // First pass: match own members that HAVE estimates to enemies that HAVE estimates
     for (const own of ownAvailable) {
-      const targets = enemies.filter(e =>
-        !assigned.has(e.id) && e.midpoint <= own.midpoint * pct
+      if (!own.estimate) continue;
+      const best = allEnemies.find(e =>
+        !assigned.has(e.id) && e.estimate && e.midpoint <= own.midpoint * pct
       );
-      if (targets.length > 0) {
-        const target = targets[targets.length - 1];
-        assigned.add(target.id);
-        assignments.push({ own, enemy: target });
+      if (best) {
+        assigned.add(best.id);
+        assignments.push({ own, enemy: best });
+      }
+    }
+
+    // Second pass: own members without estimates get first unassigned enemy (any)
+    for (const own of ownAvailable) {
+      if (own.estimate) continue;
+      const first = allEnemies.find(e => !assigned.has(e.id));
+      if (first) {
+        assigned.add(first.id);
+        assignments.push({ own, enemy: first });
       }
     }
 
     STATE.assignments = assignments;
-    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} available, ${STATE.thresholdPct}%)`);
+    const scannedOwn = ownAvailable.filter(m => m.estimate).length;
+    const scannedEnemy = allEnemies.filter(m => m.estimate).length;
+    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} online, ${scannedOwn} scanned | ${allEnemies.length} enemies, ${scannedEnemy} scanned, ${STATE.thresholdPct}%)`);
   }
 
   function getSelectedMemberTargets() {
@@ -1204,12 +1217,13 @@
     const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
     if (!own) return [];
     const ownEnriched = enrichWithStats([own])[0];
-    if (!ownEnriched.estimate) return [];
 
     const enemies = sortEnemiesByPriority(
       enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
-        .filter(m => m.estimate)
     );
+
+    // If own member has no estimate, return all enemies sorted by priority
+    if (!ownEnriched.estimate) return enemies;
 
     return getTargetsForMember(ownEnriched, enemies, pct);
   }
@@ -1302,7 +1316,8 @@
         color: white;
         display: flex; align-items: center; justify-content: center;
         font-weight: bold; font-size: 11px;
-        cursor: pointer; user-select: none;
+        cursor: pointer; user-select: none; -webkit-user-select: none;
+        touch-action: none;
         box-shadow: 0 2px 12px rgba(230,126,34,0.35);
         z-index: 999960;
         transition: box-shadow 0.2s;
@@ -1325,6 +1340,7 @@
         padding: 12px 14px;
         background: #1f2130;
         cursor: grab;
+        touch-action: none;
         display: flex; justify-content: space-between; align-items: center;
         border-bottom: 1px solid #2f3340;
         font-weight: bold; font-size: 14px;
@@ -1371,8 +1387,10 @@
     panel.innerHTML = `
       <div id="${HEADER_ID}">
         <span>\u2694\uFE0F War Manager</span>
-        <button id="tpda-war-mgr-close"
-                style="background:none;border:none;color:#e0e0e0;font-size:18px;cursor:pointer;padding:0 4px;">\u2715</button>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="tpda-war-mgr-close"
+                  style="background:#444;color:white;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;">\u25CB</button>
+        </div>
       </div>
       <div id="tpda-war-mgr-body"></div>
     `;
@@ -1471,10 +1489,10 @@
         <div style="font-weight:bold;margin-bottom:6px;">Settings</div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
           <label style="font-size:12px;color:#bbb;white-space:nowrap;">Stat threshold:</label>
-          <input id="tpda-mgr-threshold" type="number" min="10" max="100" step="5" value="${STATE.thresholdPct}"
+          <input id="tpda-mgr-threshold" type="number" min="10" max="200" step="5" value="${STATE.thresholdPct}"
                  style="width:60px;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:6px;text-align:center;" />
           <span style="font-size:12px;color:#bbb;">%</span>
-          <span style="font-size:11px;color:#888;">Assign targets at most this % of attacker's estimated stats</span>
+          <span style="font-size:11px;color:#888;">Max enemy stats as % of attacker (>100 = attack up)</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
           <label style="font-size:12px;color:#bbb;white-space:nowrap;">Refresh rate:</label>
@@ -1512,7 +1530,7 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Pick Attacker (${ownOnline.length} online)</div>
         <div style="font-size:11px;color:#888;margin-bottom:6px;">Select a faction member to build their personal target list</div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+        <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:110px;overflow-y:auto;">
           ${enriched.map(m => {
             const est = m.estimate;
             const isActive = m.id === selected;
@@ -1632,7 +1650,7 @@
     const thresholdInput = document.getElementById('tpda-mgr-threshold');
     if (thresholdInput) {
       thresholdInput.onchange = () => {
-        const val = Math.max(10, Math.min(100, Number(thresholdInput.value) || DEFAULT_THRESHOLD_PCT));
+        const val = Math.max(10, Math.min(200, Number(thresholdInput.value) || DEFAULT_THRESHOLD_PCT));
         STATE.thresholdPct = val;
         saveThresholdPct(val);
         computeAssignments();
@@ -1676,7 +1694,15 @@
 
   function renderAssignments() {
     if (!STATE.assignments.length) {
-      return '<div class="mgr-muted">No assignments yet. Scan stats and refresh data to generate target assignments.</div>';
+      const hasOwn = STATE.ownMembers.length > 0;
+      const hasEnemy = STATE.enemyMembers.length > 0;
+      const scannedOwn = STATE.ownMembers.filter(m => STATE.profileCache[m.id]?.estimate).length;
+      const scannedEnemy = STATE.enemyMembers.filter(m => STATE.profileCache[m.id]?.estimate).length;
+      let hint = '';
+      if (!hasOwn || !hasEnemy) hint = 'Refresh data to load faction members.';
+      else if (!scannedOwn && !scannedEnemy) hint = 'Scan stats first to estimate battle stats and generate assignments.';
+      else hint = `Scanned ${scannedOwn}/${STATE.ownMembers.length} own + ${scannedEnemy}/${STATE.enemyMembers.length} enemies. Try increasing the stat threshold or scanning more.`;
+      return `<div class="mgr-muted">No assignments yet. ${hint}</div>`;
     }
 
     return STATE.assignments.map(({ own, enemy }) => {
