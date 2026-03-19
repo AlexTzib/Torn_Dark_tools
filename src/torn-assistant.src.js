@@ -45,22 +45,8 @@
 
   // #COMMON_CODE
 
-  function formatSeconds(sec) {
-    sec = Math.floor(Number(sec || 0));
-    if (sec <= 0) return 'Ready';
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    const parts = [];
-    if (d) parts.push(`${d}d`);
-    if (h) parts.push(`${h}h`);
-    if (m) parts.push(`${m}m`);
-    parts.push(`${s}s`);
-    return parts.join(' ');
-  }
-
-  function formatMoney(n) { return '$' + Number(n ?? 0).toLocaleString(); }
+  /* formatSeconds/formatMoney use common.js versions.
+     Where 'Ready' is needed for zero cooldowns, call sites handle it. */
 
   const STOCK_RULES = {
     ASS: { shares: 1000000, type: 'active', frequencyDays: 7,  benefit: '1x Six Pack of Alcohol' },
@@ -983,9 +969,9 @@
         <div>Energy: ${formatBar(bars.energy)}${bars.energy?.fulltime > 0 ? ` (full in ${formatSeconds(bars.energy.fulltime)})` : bars.energy?.current != null && bars.energy.current >= bars.energy.maximum ? ' (Full)' : ''}</div>
         <div>Nerve: ${formatBar(bars.nerve)}${bars.nerve?.fulltime > 0 ? ` (full in ${formatSeconds(bars.nerve.fulltime)})` : bars.nerve?.current != null && bars.nerve.current >= bars.nerve.maximum ? ' (Full)' : ''}</div>
         <div>Happy: ${formatBar(bars.happy)}</div>
-        <div>Drug CD: ${formatSeconds(cds.drug)}</div>
-        <div>Booster CD: ${formatSeconds(cds.booster)}</div>
-        <div>Medical CD: ${formatSeconds(cds.medical)}</div>
+        <div>Drug CD: ${cds.drug > 0 ? formatSeconds(cds.drug) : 'Ready'}</div>
+        <div>Booster CD: ${cds.booster > 0 ? formatSeconds(cds.booster) : 'Ready'}</div>
+        <div>Medical CD: ${cds.medical > 0 ? formatSeconds(cds.medical) : 'Ready'}</div>
       </div>
 
       ${renderWarTimingCard(user, faction)}

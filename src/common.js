@@ -20,9 +20,8 @@
   function formatNumber(n) { return Number(n ?? 0).toLocaleString(); }
 
   function formatMoney(n) {
-    const v = Number(n || 0);
-    if (!v) return '\u2014';
-    return '$' + Math.round(v).toLocaleString();
+    if (n == null) return '\u2014';
+    return '$' + Math.round(Number(n) || 0).toLocaleString();
   }
 
   function formatSeconds(sec) {
@@ -37,6 +36,22 @@
     if (h) parts.push(`${h}h`);
     if (m) parts.push(`${m}m`);
     parts.push(`${s}s`);
+    return parts.join(' ');
+  }
+
+  /** Compact variant — omits seconds when days or hours are present */
+  function formatSecondsShort(sec) {
+    sec = Math.floor(Number(sec || 0));
+    if (sec <= 0) return 'now';
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const parts = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (m) parts.push(`${m}m`);
+    if (!d && !h) parts.push(`${s}s`);
     return parts.join(' ');
   }
 
@@ -527,6 +542,33 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ── War-shared helpers ─────────────────────────────────────── */
+
+  function loadPollMs(intervals, defaultMs) {
+    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, defaultMs);
+    return intervals.some(p => p.ms === saved) ? saved : defaultMs;
+  }
+
+  function savePollMs(ms) {
+    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
+  }
+
+  function getManualEnemyFactionId() {
+    return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
+  }
+
+  function setManualEnemyFactionId(id) {
+    setStorage(`${SCRIPT_KEY}_enemy_faction_id`, String(id || ''));
+  }
+
+  function profileUrl(id) {
+    return `https://www.torn.com/profiles.php?XID=${encodeURIComponent(id)}`;
+  }
+
+  function attackUrl(id) {
+    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(id)}`;
+  }
 
   /* ── Member data processing ────────────────────────────────── */
 

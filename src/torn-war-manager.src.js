@@ -43,7 +43,7 @@
     detectedWarInfo: null,
     lastFetchTs: 0,
     lastError: '',
-    pollMs: loadPollMs(),
+    pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
     thresholdPct: loadThresholdPct(),
     selectedMemberId: null, // currently selected own-faction member for target list
@@ -62,15 +62,8 @@
   // #COMMON_CODE
 
   /* ── Storage helpers ───────────────────────────────────────── */
-
-  function loadPollMs() {
-    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, DEFAULT_POLL_MS);
-    return POLL_INTERVALS.some(p => p.ms === saved) ? saved : DEFAULT_POLL_MS;
-  }
-
-  function savePollMs(ms) {
-    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
-  }
+  /* loadPollMs/savePollMs, getManualEnemyFactionId/setManualEnemyFactionId
+     are provided by common.js */
 
   function loadThresholdPct() {
     const saved = getStorage(`${SCRIPT_KEY}_threshold_pct`, DEFAULT_THRESHOLD_PCT);
@@ -79,14 +72,6 @@
 
   function saveThresholdPct(pct) {
     setStorage(`${SCRIPT_KEY}_threshold_pct`, pct);
-  }
-
-  function getManualEnemyFactionId() {
-    return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
-  }
-
-  function setManualEnemyFactionId(id) {
-    setStorage(`${SCRIPT_KEY}_enemy_faction_id`, String(id || ''));
   }
 
   /* ── Faction data fetching ─────────────────────────────────── */
@@ -338,14 +323,7 @@
   }
 
   /* ── Message generation ────────────────────────────────────── */
-
-  function profileUrl(id) {
-    return `https://www.torn.com/profiles.php?XID=${encodeURIComponent(id)}`;
-  }
-
-  function attackUrl(id) {
-    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(id)}`;
-  }
+  /* profileUrl/attackUrl use common.js versions */
 
   function generateAssignmentMessages() {
     if (!STATE.assignments.length) return 'No assignments yet. Scan stats first!';
@@ -908,6 +886,7 @@
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
     STATE.profileCache = loadProfileCache();
+    STATE.pollMs = loadPollMs(POLL_INTERVALS, DEFAULT_POLL_MS);
 
     ensureStyles();
     createBubble();

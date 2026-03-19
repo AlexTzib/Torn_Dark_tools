@@ -58,7 +58,7 @@
     detectedWarInfo: null,
     lastFetchTs: 0,
     lastError: '',
-    pollMs: loadPollMs(),
+    pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
     timerTickId: null,
     timerTrack: loadTimerTrack(),
@@ -97,9 +97,8 @@
   function formatNumber(n) { return Number(n ?? 0).toLocaleString(); }
 
   function formatMoney(n) {
-    const v = Number(n || 0);
-    if (!v) return '\u2014';
-    return '$' + Math.round(v).toLocaleString();
+    if (n == null) return '\u2014';
+    return '$' + Math.round(Number(n) || 0).toLocaleString();
   }
 
   function formatSeconds(sec) {
@@ -114,6 +113,22 @@
     if (h) parts.push(`${h}h`);
     if (m) parts.push(`${m}m`);
     parts.push(`${s}s`);
+    return parts.join(' ');
+  }
+
+  /** Compact variant — omits seconds when days or hours are present */
+  function formatSecondsShort(sec) {
+    sec = Math.floor(Number(sec || 0));
+    if (sec <= 0) return 'now';
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const parts = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (m) parts.push(`${m}m`);
+    if (!d && !h) parts.push(`${s}s`);
     return parts.join(' ');
   }
 
@@ -605,6 +620,33 @@
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  /* ── War-shared helpers ─────────────────────────────────────── */
+
+  function loadPollMs(intervals, defaultMs) {
+    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, defaultMs);
+    return intervals.some(p => p.ms === saved) ? saved : defaultMs;
+  }
+
+  function savePollMs(ms) {
+    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
+  }
+
+  function getManualEnemyFactionId() {
+    return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
+  }
+
+  function setManualEnemyFactionId(id) {
+    setStorage(`${SCRIPT_KEY}_enemy_faction_id`, String(id || ''));
+  }
+
+  function profileUrl(id) {
+    return `https://www.torn.com/profiles.php?XID=${encodeURIComponent(id)}`;
+  }
+
+  function attackUrl(id) {
+    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(id)}`;
+  }
+
   /* ── Member data processing ────────────────────────────────── */
 
   function normalizeMembers(data) {
@@ -969,45 +1011,12 @@
 
 
 
-  function formatSeconds(sec) {
-    sec = Number(sec || 0);
-    if (!Number.isFinite(sec) || sec <= 0) return 'now';
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    const parts = [];
-    if (d) parts.push(`${d}d`);
-    if (h) parts.push(`${h}h`);
-    if (m) parts.push(`${m}m`);
-    if (!d && !h) parts.push(`${s}s`);
-    return parts.join(' ');
-  }
+  /* War-bubble uses formatSecondsShort() from common for display (omits
+     seconds when d/h present) and formatSeconds() from common for full
+     timers.  formatTimerFull was removed — it was identical to common's
+     formatSeconds. */
 
-  function formatTimerFull(sec) {
-    sec = Number(sec || 0);
-    if (!Number.isFinite(sec) || sec <= 0) return 'now';
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    const parts = [];
-    if (d) parts.push(`${d}d`);
-    if (h) parts.push(`${h}h`);
-    if (m) parts.push(`${m}m`);
-    parts.push(`${s}s`);
-    return parts.join(' ');
-  }
-
-  function loadPollMs() {
-    const saved = getStorage(`${SCRIPT_KEY}_poll_ms`, DEFAULT_POLL_MS);
-    const valid = POLL_INTERVALS.find(p => p.ms === saved);
-    return valid ? saved : DEFAULT_POLL_MS;
-  }
-
-  function savePollMs(ms) {
-    setStorage(`${SCRIPT_KEY}_poll_ms`, ms);
-  }
+  /* loadPollMs/savePollMs use common.js versions (parameterized) */
 
   function loadTimerTrack() {
     return getStorage(TIMER_TRACK_KEY, {});
@@ -1075,13 +1084,7 @@
     renderPanel();
   }
 
-  function getManualEnemyFactionId() {
-    return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
-  }
-
-  function setManualEnemyFactionId(id) {
-    setStorage(`${SCRIPT_KEY}_enemy_faction_id`, id || '');
-  }
+  /* getManualEnemyFactionId/setManualEnemyFactionId use common.js versions */
 
   /* ── Panel expand/collapse hooks (called by common code) ──── */
 
@@ -1501,9 +1504,9 @@
     const showFull = bucket === 'hospital' || bucket === 'jail' || bucket === 'traveling';
     if (showFull && member.timerEndTs) {
       const remaining = Math.max(0, member.timerEndTs - nowUnix());
-      return `<span class="tpda-war-timer" data-end="${member.timerEndTs}">Time left: ${formatTimerFull(remaining)}</span>`;
+      return `<span class="tpda-war-timer" data-end="${member.timerEndTs}">Time left: ${formatSeconds(remaining)}</span>`;
     }
-    return `Time left: ${formatSeconds(member.timerRemainingSec)}`;
+    return `Time left: ${formatSecondsShort(member.timerRemainingSec)}`;
   }
 
   function tickTimers() {
@@ -1513,19 +1516,17 @@
       const end = Number(el.dataset.end);
       if (!end) return;
       const remaining = Math.max(0, end - now);
-      el.textContent = 'Time left: ' + formatTimerFull(remaining);
+      el.textContent = 'Time left: ' + formatSeconds(remaining);
     });
   }
 
   function verifyText(member) {
     if (!member.fasterThanExpected) return '';
-    const delta = member.timerDeltaSec != null ? ` • faster by ${formatSeconds(member.timerDeltaSec)}` : '';
+    const delta = member.timerDeltaSec != null ? ` • faster by ${formatSecondsShort(member.timerDeltaSec)}` : '';
     return `<div class="war-fastdrop">Timer dropped faster than expected${escapeHtml(delta)}</div>`;
   }
 
-  function attackUrl(memberId) {
-    return `https://www.torn.com/loader.php?sid=attack&user2ID=${encodeURIComponent(memberId)}`;
-  }
+  /* attackUrl/profileUrl use common.js versions */
 
   function renderMemberList(list, cls) {
     if (!list.length) {
@@ -1661,7 +1662,7 @@
         <div>Faction ID: ${escapeHtml(STATE.enemyFactionId || 'Not set')}</div>
         ${STATE.detectedWarInfo ? `<div style="color:#ffcc00;">
           ${escapeHtml(STATE.detectedWarInfo.type)}: ${STATE.detectedWarInfo.startsIn > 0
-            ? 'starts in ' + formatSeconds(STATE.detectedWarInfo.startsIn)
+            ? 'starts in ' + formatSecondsShort(STATE.detectedWarInfo.startsIn)
             : 'in progress'}
           ${STATE.detectedWarInfo.start ? ' (' + new Date(STATE.detectedWarInfo.start * 1000).toLocaleString() + ')' : ''}
         </div>` : ''}
@@ -1780,6 +1781,7 @@
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
     STATE.profileCache = loadProfileCache();
+    STATE.pollMs = loadPollMs(POLL_INTERVALS, DEFAULT_POLL_MS);
 
     ensureStyles();
     createBubble();
