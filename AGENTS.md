@@ -37,7 +37,7 @@ Torn_Dark_tools/
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~740 lines)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
-├── torn-war-bubble.user.js                ← War Bubble (~1486 lines)
+├── torn-war-bubble.user.js                ← War Bubble (~1525 lines)
 ├── torn-war-bubble.md                     ← War Bubble documentation
 ├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~950 lines)
 └── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
@@ -372,6 +372,12 @@ Every script has:
 ### War Bubble (`torn-war-bubble.user.js`)
 
 **Purpose:** Enemy faction online tracker with location buckets, timer analysis, attack buttons.
+
+**v3.2.0 changes:**
+- **Toggle bug fix:** `STATE.collapsed[key] = !STATE.collapsed[key]` was broken when key was `undefined` (`!undefined` = `true` = stays collapsed). Fixed to explicitly default `undefined` to `true` before toggling.
+- **Member cap per section:** `SECTION_MEMBER_CAP = 15` — sections render at most 15 members by default with a "Show all X members (+N more)" link. Prevents PDA freezing on factions with 100+ members (each member = 3 buttons + ~400 bytes HTML).
+- **`STATE.showAll`:** Tracks which sections the user has expanded beyond the cap. Resets when the section is collapsed.
+- **Collapse All / Expand All buttons:** Two buttons above the member sections for quick bulk toggle. Collapse All also resets showAll state.
 
 **Key functions:**
 - `refreshEnemyFactionData()` — Fetches `api.torn.com/faction/{id}?selections=basic`

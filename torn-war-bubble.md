@@ -12,10 +12,12 @@ It displays a draggable red bubble that expands into a panel showing enemy facti
 | Feature | Description |
 |---|---|
 | **Enemy faction tracker** | Fetches the enemy faction's member list via the Torn API (`faction/{id}?selections=basic`) |
-| **Online/activity grouping** | Sorts members into: Online in Torn, Online abroad, Recently active in Torn, Recently active abroad, Hospital, Jail, Unknown |
+| **Online/activity grouping** | Sorts members into: Online in Torn, Online abroad, Recently active in Torn, Recently active abroad, Hospital, Jail, Offline 1-24h, Offline >24h |
 | **Location inference** | Detects hospital, jail, federal jail, traveling, abroad, or in-Torn status from member data |
 | **Timer extraction** | Parses hospital/jail/travel remaining time from multiple possible API fields (timestamps, text durations, numeric seconds) |
 | **Fast-drop detection** | Compares consecutive timer readings to flag members whose timers dropped faster than wall-clock time (> 45s discrepancy), suggesting bail/bust/revive activity |
+| **Member cap per section** | Each section shows at most 15 members by default with a "Show all" link to reveal the rest — prevents PDA from freezing on large factions |
+| **Collapse All / Expand All** | Bulk toggle buttons above the member sections for quick navigation |
 | **Attack buttons** | Each member row has "Copy Attack URL", "Copy Name", and "Go Attack" link buttons |
 | **Manual faction ID** | Allows the user to manually enter an enemy faction ID if auto-detection fails |
 | **Configurable poll interval** | Dropdown to set refresh rate: 30s / 1min / 2min / 5min / 10min |
@@ -121,10 +123,12 @@ The script needs a Torn API key to fetch enemy faction data. Three methods are s
 - **Bubble (red, "WAR")** — tap to expand; drag to reposition
 - **Refresh** button — immediately fetches fresh faction data
 - **○** button — collapses the panel back to the bubble
+- **Collapse All / Expand All** — bulk toggle buttons for all member sections
 - **Poll interval dropdown** — set refresh rate: 30s / 1min / 2min / 5min / 10min
 - **API key field** — manual key entry (optional in Torn PDA, required in Tampermonkey)
 - **Manual faction ID** — enter the enemy faction ID if auto-detection doesn't work
 - **Attack buttons** — per-member: "Go Attack" (link), "Copy URL", "Copy Name"
+- **Show all** link — appears when a section has more than 15 members; click to reveal all
 - **Debug Log** section — tap the header to expand; "Copy Log" copies all entries to clipboard
 - Auto-polling runs at the configured interval while the panel is open; stops when minimized
 

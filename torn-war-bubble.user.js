@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.1.1
+// @version      3.2.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -33,6 +33,7 @@
 
   const TIMER_TRACK_MAX_ENTRIES = 500;
   const TIMER_TRACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const SECTION_MEMBER_CAP = 15; /* Max members shown per section before "Show all" */
 
   const STATE = {
     apiKey: null, // memory only — never persisted to storage
@@ -48,6 +49,7 @@
     timerTickId: null,
     timerTrack: loadTimerTrack(),
     collapsed: loadCollapsedState(),
+    showAll: {}, /* tracks which sections are expanded beyond SECTION_MEMBER_CAP */
     ui: {
       minimized: true,
       zIndexBase: 999970
@@ -1201,12 +1203,18 @@
   function renderSection(key, title, list, cls) {
     const collapsed = (STATE.collapsed[key] !== undefined) ? STATE.collapsed[key] : true;
     const arrow = collapsed ? '\u25B6' : '\u25BC';
+    const capped = !STATE.showAll[key] && list.length > SECTION_MEMBER_CAP;
+    const visible = capped ? list.slice(0, SECTION_MEMBER_CAP) : list;
+    const hiddenCount = list.length - visible.length;
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div class="tpda-war-section-toggle" data-section="${key}" style="font-weight:bold;cursor:pointer;user-select:none;">
           ${arrow} ${title} (${formatNumber(list.length)})
         </div>
-        ${collapsed ? '' : `<div style="margin-top:6px;">${renderMemberList(list, cls)}</div>`}
+        ${collapsed ? '' : `<div style="margin-top:6px;">
+          ${renderMemberList(visible, cls)}
+          ${hiddenCount > 0 ? `<div class="tpda-war-show-all" data-section="${key}" style="margin-top:6px;text-align:center;cursor:pointer;color:#6ea8fe;font-size:12px;padding:6px;border-top:1px solid #2f3340;">Show all ${formatNumber(list.length)} members (+${hiddenCount} more)</div>` : ''}
+        </div>`}
       </div>
     `;
   }
@@ -1278,6 +1286,11 @@
         </div>
       ` : ''}
 
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button class="tpda-war-collapse-all" style="flex:1;background:#2f3340;color:#bbb;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Collapse All</button>
+        <button class="tpda-war-expand-all" style="flex:1;background:#2f3340;color:#bbb;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Expand All</button>
+      </div>
+
       ${renderSection('onlineTorn', 'Online in Torn', groups.onlineTorn, 'war-on')}
       ${renderSection('onlineAway', 'Online abroad / in flight', groups.onlineAway, 'war-abroad')}
       ${renderSection('recentTorn', 'Recently active in Torn', groups.recentTorn, 'war-recent')}
@@ -1342,7 +1355,7 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
       };
     }
 
-    // Delegated click handler for copy buttons
+    // Delegated click handler for copy buttons, section toggles, show-all, collapse/expand all
     const warBody = document.getElementById('tpda-war-body');
     if (warBody) {
       warBody.addEventListener('click', (e) => {
@@ -1352,11 +1365,38 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
           if (text) copyToClipboard(text, btn);
           return;
         }
+        if (e.target.closest('.tpda-war-collapse-all')) {
+          const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
+          keys.forEach(k => { STATE.collapsed[k] = true; STATE.showAll[k] = false; });
+          saveCollapsedState();
+          renderPanel();
+          return;
+        }
+        if (e.target.closest('.tpda-war-expand-all')) {
+          const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
+          keys.forEach(k => { STATE.collapsed[k] = false; });
+          saveCollapsedState();
+          renderPanel();
+          return;
+        }
+        const showAll = e.target.closest('.tpda-war-show-all');
+        if (showAll) {
+          const key = showAll.dataset.section;
+          if (key) {
+            STATE.showAll[key] = true;
+            renderPanel();
+          }
+          return;
+        }
         const toggle = e.target.closest('.tpda-war-section-toggle');
         if (toggle) {
           const key = toggle.dataset.section;
           if (key) {
-            STATE.collapsed[key] = !STATE.collapsed[key];
+            /* Treat undefined (fresh/missing key) as true (collapsed) before toggling */
+            const current = (STATE.collapsed[key] !== undefined) ? STATE.collapsed[key] : true;
+            STATE.collapsed[key] = !current;
+            /* Reset show-all when collapsing, so next expand starts capped again */
+            if (STATE.collapsed[key]) STATE.showAll[key] = false;
             saveCollapsedState();
             renderPanel();
           }
