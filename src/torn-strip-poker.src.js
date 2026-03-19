@@ -510,6 +510,65 @@
 
   function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
 
+  /* ── DOM diagnostic dump — logs actual page structure so we can fix selectors ── */
+  function diagnoseDom() {
+    addLog('=== DOM DIAGNOSIS START ===');
+    addLog(`URL: ${window.location.href}`);
+
+    /* Check top-level containers */
+    const checks = [
+      'playerMeGateway', 'playerMe', 'hand', 'card', 'front',
+      'communityCards', 'community', 'opponent', 'table', 'board',
+      'holdem', 'poker', 'game', 'seat', 'player'
+    ];
+    checks.forEach(frag => {
+      const els = qsa(`[class*="${frag}"]`);
+      if (els.length > 0) {
+        addLog(`[class*="${frag}"]: ${els.length} el(s)`);
+        els.slice(0, 3).forEach((el, i) => {
+          const tag = el.tagName.toLowerCase();
+          const cls = (el.className || '').toString().slice(0, 200);
+          addLog(`  #${i} <${tag}> class="${cls}"`);
+          /* Show first 3 children */
+          const kids = Array.from(el.children).slice(0, 5);
+          kids.forEach(kid => {
+            const kCls = (kid.className || '').toString().slice(0, 150);
+            addLog(`    <${kid.tagName.toLowerCase()}> class="${kCls}"`);
+          });
+        });
+      }
+    });
+
+    /* Check for suit-rank pattern anywhere in the page */
+    const suitEls = qsa('[class*="hearts"],[class*="diamonds"],[class*="clubs"],[class*="spades"]');
+    addLog(`Suit-class elements: ${suitEls.length}`);
+    suitEls.slice(0, 10).forEach((el, i) => {
+      const cls = (el.className || '').toString().slice(0, 200);
+      addLog(`  suit#${i} <${el.tagName.toLowerCase()}> class="${cls}"`);
+    });
+
+    /* Check for data attributes */
+    const dataEls = qsa('[data-card],[data-rank],[data-suit],[data-value]');
+    addLog(`Data-attr elements: ${dataEls.length}`);
+    dataEls.slice(0, 5).forEach((el, i) => {
+      addLog(`  data#${i} card=${el.dataset.card || ''} rank=${el.dataset.rank || ''} suit=${el.dataset.suit || ''}`);
+    });
+
+    /* Check for card images */
+    const imgs = qsa('img[src*="card"],img[alt*="card"],img[src*="poker"],img[src*="heart"],img[src*="spade"],img[src*="diamond"],img[src*="club"]');
+    addLog(`Card-like images: ${imgs.length}`);
+    imgs.slice(0, 5).forEach((el, i) => {
+      addLog(`  img#${i} src=${(el.src || '').slice(-80)} alt=${el.alt || ''}`);
+    });
+
+    /* Check for SVG elements (some games use SVGs for cards) */
+    const svgs = qsa('svg[class*="card"],svg[class*="heart"],svg[class*="spade"]');
+    addLog(`Card-like SVGs: ${svgs.length}`);
+
+    addLog('=== DOM DIAGNOSIS END ===');
+    renderPanel();
+  }
+
   function extractCardsFrom(elements) {
     const cards = [];
     const seen  = new Set();
@@ -582,6 +641,51 @@
       communityCards = extractCardsFrom(communityCardEls);
       if (holeCards.length > 0 || communityCards.length > 0) {
         addLog(`Torn holdem DOM: ${holeCards.length} hole + ${communityCards.length} community`);
+      }
+    }
+
+    /* ─── Strategy 1b: Try card class directly on front___ element ── */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const playerFronts = qsa('[class*="playerMeGateway"] [class*="hand"] [class*="card"] [class*="front"]');
+      const commFronts   = qsa('[class*="communityCards"] [class*="front"]');
+      if (playerFronts.length > 0 || commFronts.length > 0) {
+        holeCards = extractCardsFrom(playerFronts);
+        communityCards = extractCardsFrom(commFronts);
+        if (holeCards.length > 0 || communityCards.length > 0) {
+          addLog(`Torn holdem front: ${holeCards.length} hole + ${communityCards.length} community`);
+        }
+      }
+    }
+
+    /* ─── Strategy 1c: Try card class on the card___ element itself ── */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const playerCards = qsa('[class*="playerMeGateway"] [class*="hand"] [class*="card"]');
+      const commCards   = qsa('[class*="communityCards"] [class*="card"]');
+      if (playerCards.length > 0 || commCards.length > 0) {
+        holeCards = extractCardsFrom(playerCards);
+        communityCards = extractCardsFrom(commCards);
+        if (holeCards.length > 0 || communityCards.length > 0) {
+          addLog(`Torn holdem card-el: ${holeCards.length} hole + ${communityCards.length} community`);
+        }
+      }
+    }
+
+    /* ─── Strategy 1d: Walk ALL descendants of playerMeGateway / communityCards ── */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const myZone  = document.querySelector('[class*="playerMeGateway"]');
+      const comZone = document.querySelector('[class*="communityCards"]');
+      if (myZone || comZone) {
+        if (myZone) {
+          const all = Array.from(myZone.querySelectorAll('*'));
+          holeCards = extractCardsFrom(all);
+        }
+        if (comZone) {
+          const all = Array.from(comZone.querySelectorAll('*'));
+          communityCards = extractCardsFrom(all);
+        }
+        if (holeCards.length > 0 || communityCards.length > 0) {
+          addLog(`Torn holdem deep: ${holeCards.length} hole + ${communityCards.length} community`);
+        }
       }
     }
 
@@ -795,6 +899,7 @@
         </div>
         <div style="display:flex;gap:4px;align-items:center;">
           <button id="tpda-pk-scan" style="background:#1b5e20;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;">Scan</button>
+          <button id="tpda-pk-diag" style="background:#6a1b9a;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;">\uD83D\uDD0D</button>
           <button id="tpda-pk-collapse" style="background:#444;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;">\u25CB</button>
         </div>
       </div>
@@ -804,6 +909,7 @@
     document.body.appendChild(p);
 
     document.getElementById('tpda-pk-scan').addEventListener('click', scanDom);
+    document.getElementById('tpda-pk-diag').addEventListener('click', diagnoseDom);
     document.getElementById('tpda-pk-collapse').addEventListener('click', collapseToBubble);
 
     /* Delegated click handler — attached ONCE here, never inside renderPanel().
