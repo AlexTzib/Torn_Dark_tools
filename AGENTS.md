@@ -40,7 +40,9 @@ Torn_Dark_tools/
 ├── torn-war-bubble.user.js                ← War Bubble (~1540 lines)
 ├── torn-war-bubble.md                     ← War Bubble documentation
 ├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~950 lines)
-└── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
+├── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
+├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble
+└── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
 ```
 
 - **Remote:** `https://github.com/AlexTzib/Torn_Dark_tools.git`
@@ -258,12 +260,13 @@ Each script uses a unique z-index base so they can coexist:
 
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
+| Bounty Filter | 999950 | `tpda-bounty-bubble` | `tpda-bounty-panel` |
 | Strip Poker Advisor | 999960 | `tpda-poker-bubble` | `tpda-poker-panel` |
 | War Bubble | 999970 | `tpda-war-online-bubble` | `tpda-war-online-panel` |
 | Plushie Prices | 999980 | `tpda-plushie-bubble` | `tpda-plushie-panel` |
 | AI Advisor | 999990 | `tpda-safe-ai-bubble` | `tpda-safe-ai-panel` |
 
-When adding a new script, pick a z-index base that doesn't collide (e.g., 999950).
+When adding a new script, pick a z-index base that doesn't collide (e.g., 999940).
 
 ### localStorage Keys
 
@@ -275,6 +278,7 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | Plushie Prices | `tpda_plushie_prices_v1` | `_apikey`, `_bubble_pos`, `_panel_pos`, `_prices` |
 | War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval`, `_collapsed` |
 | Strip Poker | `tpda_strip_poker_v1` | `_bubble_pos`, `_panel_pos` |
+| Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters` |
 
 ### Debug Log Pattern
 
@@ -484,6 +488,47 @@ Every script has:
 - Win probability requires beating ALL opponents (not just one)
 - Tie = all opponents tied with you (rare with multiple opponents)
 - User can manually adjust opponent count with +/- buttons in the panel
+
+### Bounty Filter (`torn-bounty-filter-bubble.user.js`)
+
+**Purpose:** Fetches bounties from the Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, level, and reward amount. Attack links for easy claiming.
+
+**Design:**
+- **56 px bubble** with orange gradient, labeled "BTY"
+- **380 px panel** — filter controls at top, scrollable bounty list below
+- **z-index base 999950** — below all other scripts
+- **Two-phase data fetch:** First fetches bounty list from `torn/?selections=bounties`, then enriches each target with `user/{id}?selections=profile` to get their status
+
+**Key functions:**
+- `fetchBounties()` — Fetches `torn/?selections=bounties`, parses bounty objects, then calls `enrichBountyTargets()`
+- `enrichBountyTargets()` — For up to 30 unique targets, fetches `user/{id}?selections=profile` with 350ms gaps. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Results cached in `STATE.statusCache` (1-minute TTL)
+- `applyEnrichment()` — Merges status cache into bounty list, producing `STATE.enriched[]`
+- `filteredBounties()` — Applies all active filters to `STATE.enriched[]`
+- `renderPanel()` — Renders filter controls (state checkboxes, max level, min reward, hospital-soon filter), status bar, bounty rows with state icon, name (profile link), level, reward, timer, and Attack button
+
+**Filters:**
+| Filter | Default | Description |
+|--------|---------|-------------|
+| In Torn | ON | Show targets with "Okay" status (available to attack) |
+| Hospital | ON | Show hospitalized targets (with remaining time) |
+| Jail | OFF | Show jailed targets |
+| Abroad | OFF | Show targets abroad or traveling |
+| Unknown | ON | Show targets whose status couldn't be determined |
+| Max Level | 0 (any) | Hide targets above this level |
+| Min Reward | 0 (any) | Hide bounties below this reward |
+| Hide soon | OFF | Hide hospital targets releasing in < N minutes |
+
+**Data flow:**
+1. API key resolved (PDA > shared manual > intercepted)
+2. On panel open (or Refresh): fetch bounty list from `torn/?selections=bounties` (2-min cache)
+3. For each unique target (up to 30), fetch `user/{id}?selections=profile` (1-min cache, 350ms gaps)
+4. `inferLocationState()` + `extractTimerInfo()` determine state/timer from profile response
+5. `filteredBounties()` applies user filters, `renderPanel()` displays results
+
+**API usage:**
+- 1 call for bounty list + up to 30 calls for target enrichment per refresh
+- 350ms gap between enrichment calls (~170 calls/min if only this script)
+- Caching prevents redundant calls (2-min bounty list, 1-min per target)
 
 ---
 
@@ -715,6 +760,8 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 | `market` (v2) | `itemmarket` (via `/v2/market/{id}/itemmarket`) | Plushie Prices | Item market floor and average prices per item |
 | *(external)* | TornW3B `weav3r.dev/api/marketplace/{id}` | Plushie Prices | Bazaar floor prices (no API key needed) |
 | `torn` | (various, intercepted) | AI Advisor | Market data, item values |
+| `torn` | `bounties` | Bounty Filter | Current bounty list |
+| `user` (by ID) | `profile` | Bounty Filter | Target state (hospital/jail/abroad/in Torn), timers |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
 

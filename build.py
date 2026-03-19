@@ -27,6 +27,7 @@ SCRIPTS = {
     'torn-war-bubble.src.js':          'torn-war-bubble.user.js',
     'torn-strip-poker.src.js':         'torn-strip-poker-bubble.user.js',
     'torn-war-manager.src.js':         'torn-war-manager.user.js',
+    'torn-bounty-filter.src.js':       'torn-bounty-filter-bubble.user.js',
 }
 
 

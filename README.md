@@ -63,6 +63,7 @@ A compact poker hand evaluator for Torn's Strip Poker mini-game. Designed to be 
 | [**Plushie Prices**](torn-pda-deal-finder-bubble.md) | Purple teddy bear | Plushie bazaar vs item market price comparison | `market/{id}?selections=bazaar,itemmarket` (13 calls per refresh) |
 | [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis, attack links | `faction/{id}?selections=basic` (configurable 30s–10min) |
 | [**Strip Poker Advisor**](torn-strip-poker-bubble.md) | Green "♠" | Poker hand evaluator, win probability, action suggestion | None (client-side only) |
+| [**Bounty Filter**](torn-bounty-filter-bubble.md) | Orange "BTY" | Filter bounties by state (hospital/jail/abroad/in Torn), hospital timers, level, reward | `torn/?selections=bounties` + `user/{id}?selections=profile` |
 
 ---
 
