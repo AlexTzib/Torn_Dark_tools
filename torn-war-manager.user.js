@@ -1912,7 +1912,7 @@
       }
       return `
         <div style="padding:4px 0;border-top:1px solid #2a2d38;font-size:12px;">
-          <span class="${cls}"><strong>${escapeHtml(m.name)}</strong></span>
+          <a href="${escapeHtml(profileUrl(m.id))}" target="_blank" rel="noopener" class="${cls}" style="color:inherit;text-decoration:underline;text-decoration-style:dotted;"><strong>${escapeHtml(m.name)}</strong></a>
           ${m.level ? ` Lv${escapeHtml(m.level)}` : ''}
           ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
           <span style="color:#888;">\u2022 ${m.isOnline ? 'Online' : escapeHtml(m.relative)} \u2022 ${escapeHtml(m.locationLabel)}</span>
