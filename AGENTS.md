@@ -39,7 +39,7 @@ Torn_Dark_tools/
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
 ├── torn-war-bubble.user.js                ← War Bubble (~1486 lines)
 ├── torn-war-bubble.md                     ← War Bubble documentation
-├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~785 lines)
+├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~950 lines)
 └── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
 ```
 
@@ -399,20 +399,31 @@ Every script has:
 
 **Purpose:** Compact poker hand evaluator for Strip Poker. No API key needed — pure client-side math.
 
+**v1.1.0 changes:** Added automatic card detection via XHR/fetch interception + MutationObserver-driven DOM auto-scan. Cards are now detected automatically when the poker game sends data.
+
 **Design choices (pocket-friendly):**
 - **40 px bubble** (vs standard 56 px) — won't cover the poker table on mobile
 - **260 px panel** (vs standard 390–420 px) — leaves room for the game UI
 - **z-index base 999960** — lowest of all scripts, sits behind other bubbles
-- **No fetch/XHR hooks, no API calls** — zero network overhead
+- **No API calls** — zero external network overhead (XHR/fetch hooks only intercept Torn's own game data)
 
 **Key functions:**
+- `parseClassCode(classCode)` — Parses Torn's casino card format (`"hearts-2"`, `"spades-K"`) into `{rank, suit, value}`.
+- `handlePokerPayload(data)` — Processes intercepted JSON game responses, extracting cards from various known data structures (`player.hand`, `yourCards`, `currentGame[]`, etc.) with recursive fallback scan.
+- `hookFetch()` / `hookXHR()` — Monkey-patches `fetch` and `XMLHttpRequest` to intercept poker-related URLs (`sid=*poker*`, `stripPoker`, `action=*poker*`). Installed immediately on script load (before DOM ready).
+- `startCardObserver()` — Sets up a `MutationObserver` on `#mainContainer` (or `body`) that debounce-triggers `scanDom()` every 500ms when the panel is open.
 - `evaluate5(cards)` — Full 5-card hand evaluator: rank (0–9), name, numeric score for tie-breaking. Handles ace-low straights (A-2-3-4-5) with correct `straightHigh` scoring.
 - `calcWinProb(myCards)` — Monte Carlo simulation: builds remaining 47-card deck, Fisher-Yates partial-shuffles 5 000 opponent hands, counts wins/ties.
 - `calcOppRange(myCards)` — Same simulation (3 000 samples) bucketed by hand name, tracking which beat the player's hand.
 - `suggest(prob)` — Maps effective win % (win + tie×0.5) to RAISE (≥72%) / CALL (≥42%) / CAUTION (≥30%) / FOLD (<30%).
-- `scanDom()` — Best-effort card detection from page: images (src/alt patterns), data attributes (`[data-card]`, `[data-rank]`), text with suit symbols (♣♦♥♠).
+- `scanDom()` — Best-effort card detection from page: images (src/alt patterns), data attributes, text suit symbols, and Torn's CSS-class card format (`hearts-2` etc.). Respects XHR-detected cards (won't overwrite with fewer DOM-scanned cards).
 - `addCard(rank, suit)` / `removeCard(idx)` / `clearCards()` — Manage the 5-card hand state; auto-evaluates when 5 cards are entered.
-- `renderPanel()` — Card picker (two-step: rank row → suit row), hand display, strength bar, action recommendation, collapsible opponent range, debug log.
+- `renderPanel()` — Card picker (two-step: rank row → suit row), hand display with source indicator (auto/scanned/manual), strength bar, action recommendation, collapsible opponent range, debug log.
+
+**Card detection priority:**
+1. **XHR/fetch interception** — Highest priority, captures game data JSON directly
+2. **DOM CSS-class scan** — Torn's `hearts-2`, `spades-K` style class names
+3. **Legacy DOM scan** — `<img>` src/alt, `[data-card]` attributes, unicode suit symbols
 
 **Card picker UX:**
 1. Tap a rank button (2–A) — highlights green
@@ -421,7 +432,7 @@ Every script has:
 4. Tap any selected card to remove it
 5. Evaluation runs automatically when 5th card is added
 
-**DOM scanning strategies:**
+**DOM scanning strategies (legacy):**
 | Strategy | Selector | Parses |
 |----------|----------|--------|
 | Images | `img` elements | Card rank+suit from `src` and `alt` text patterns |

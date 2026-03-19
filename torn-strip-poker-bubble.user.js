@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Strip Poker Advisor
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      1.0.0
+// @version      1.1.0
 // @description  Compact poker hand advisor for Torn Strip Poker. Tap-to-pick cards, evaluates hand strength via Monte Carlo simulation, and suggests optimal play. Tiny bubble won't block the pocket screen.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -36,6 +36,7 @@
   /* ── state ─────────────────────────────────────────────────── */
   const STATE = {
     myCards: [],
+    cardSource: null, /* 'xhr', 'scan', 'manual' — tracks how cards were set */
     pickingRank: null,
     handEval: null,
     winProb: null,
@@ -107,6 +108,128 @@
   function cardKey(c)  { return c.rank + c.suit; }
   function cardHtml(c) {
     return `<span style="color:${SUIT_CLR[c.suit]};font-weight:bold;">${escapeHtml(c.rank)}${SUIT_SYM[c.suit]}</span>`;
+  }
+
+  /* ── classCode parser (Torn casino format) ─────────────────── */
+  const CLASS_SUIT_MAP = { hearts: 'h', diamonds: 'd', clubs: 'c', spades: 's' };
+  function parseClassCode(classCode) {
+    if (!classCode) return null;
+    const m = classCode.match(/^(hearts|diamonds|clubs|spades)-(\d+|[JQKA])$/i);
+    if (!m) return null;
+    const suit = CLASS_SUIT_MAP[m[1].toLowerCase()];
+    const rank = m[2].toUpperCase();
+    if (!suit || !RANK_VAL[rank]) return null;
+    return { rank, suit, value: RANK_VAL[rank] };
+  }
+
+  /* ── XHR / fetch interception for poker game data ──────────── */
+  function handlePokerPayload(data) {
+    if (!data || typeof data !== 'object') return;
+    const cards = [];
+
+    function extractCards(info) {
+      if (!info) return;
+      if (Array.isArray(info)) {
+        info.forEach(c => {
+          const parsed = parseClassCode(c.classCode || c.class_code);
+          if (parsed) cards.push(parsed);
+        });
+      } else if (info.classCode || info.class_code) {
+        const parsed = parseClassCode(info.classCode || info.class_code);
+        if (parsed) cards.push(parsed);
+      }
+    }
+
+    /* Torn casino patterns: data.player.hand, data.currentGame[].playerCardInfo, data.yourCards, etc. */
+    if (data.player?.hand) extractCards(data.player.hand);
+    if (data.yourCards) extractCards(data.yourCards);
+    if (data.yourHand) extractCards(data.yourHand);
+    if (data.hand) extractCards(data.hand);
+    if (Array.isArray(data.currentGame)) {
+      data.currentGame.forEach(g => {
+        if (g.playerCardInfo) extractCards([g.playerCardInfo]);
+      });
+    }
+    /* Fallback: scan all arrays for classCode objects */
+    if (cards.length === 0) {
+      const scan = (obj, depth) => {
+        if (depth > 3 || !obj || typeof obj !== 'object') return;
+        if (Array.isArray(obj)) {
+          for (const item of obj) {
+            if (item && (item.classCode || item.class_code)) {
+              const p = parseClassCode(item.classCode || item.class_code);
+              if (p) cards.push(p);
+            } else {
+              scan(item, depth + 1);
+            }
+          }
+        } else {
+          for (const v of Object.values(obj)) scan(v, depth + 1);
+        }
+      };
+      scan(data, 0);
+    }
+
+    if (cards.length >= 1 && cards.length <= 10) {
+      /* Take at most 5 unique cards (player hand) */
+      const seen = new Set();
+      const unique = [];
+      for (const c of cards) {
+        const k = cardKey(c);
+        if (!seen.has(k)) { seen.add(k); unique.push(c); }
+        if (unique.length >= 5) break;
+      }
+      STATE.myCards = unique;
+      STATE.cardSource = 'xhr';
+      STATE.pickingRank = null;
+      if (unique.length === 5) runEval();
+      else { STATE.handEval = null; STATE.winProb = null; STATE.suggestion = suggest(null); STATE.oppRange = null; }
+      addLog(`Auto-detected ${unique.length} card(s) from game data`);
+      renderPanel();
+    }
+  }
+
+  function isPokerUrl(url) {
+    return /sid=.*poker/i.test(url) || /poker.*Data/i.test(url) ||
+           /stripPoker/i.test(url) || /step=.*poker/i.test(url) ||
+           /action=.*poker/i.test(url);
+  }
+
+  function hookFetch() {
+    const orig = window.fetch;
+    window.fetch = function (...args) {
+      const result = orig.apply(this, args);
+      result.then(resp => {
+        try {
+          const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+          if (isPokerUrl(url)) {
+            resp.clone().json().then(d => handlePokerPayload(d)).catch(() => {});
+          }
+        } catch {}
+      }).catch(() => {});
+      return result;
+    };
+  }
+
+  function hookXHR() {
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      this._tpdaPokerUrl = url;
+      return origOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function (...args) {
+      const u = this._tpdaPokerUrl || '';
+      if (u && isPokerUrl(u)) {
+        this.addEventListener('load', function () {
+          try {
+            const d = JSON.parse(this.responseText);
+            handlePokerPayload(d);
+          } catch {}
+        });
+      }
+      return origSend.apply(this, args);
+    };
   }
 
   /* ── 5-card hand evaluator ─────────────────────────────────── */
@@ -257,6 +380,7 @@
     if (STATE.myCards.length >= 5) return;
     if (STATE.myCards.some(c => cardKey(c) === rank + suit)) return;
     STATE.myCards.push({ rank, suit, value: RANK_VAL[rank] });
+    STATE.cardSource = 'manual';
     STATE.pickingRank = null;
     if (STATE.myCards.length === 5) runEval();
     renderPanel();
@@ -273,6 +397,7 @@
 
   function clearCards() {
     STATE.myCards = [];
+    STATE.cardSource = null;
     STATE.pickingRank = null;
     STATE.handEval = null;
     STATE.winProb  = null;
@@ -327,8 +452,26 @@
       }
     });
 
+    /* Torn casino CSS-class card format: elements with class like "hearts-2", "spades-K" */
+    document.querySelectorAll('[class*="hearts-"],[class*="diamonds-"],[class*="clubs-"],[class*="spades-"]').forEach(el => {
+      const cls = el.className || '';
+      const matches = cls.match(/\b(hearts|diamonds|clubs|spades)-(\d+|[JQKA])\b/gi);
+      if (matches) {
+        matches.forEach(cc => {
+          const parsed = parseClassCode(cc);
+          if (parsed) tryAdd(parsed.rank, parsed.suit);
+        });
+      }
+    });
+
     if (cards.length > 0 && cards.length <= 5) {
+      /* Don't overwrite XHR-detected hand with fewer DOM-scanned cards */
+      if (STATE.cardSource === 'xhr' && STATE.myCards.length >= cards.length) {
+        addLog(`Scan: ${cards.length} card(s) found but XHR data preferred`);
+        return;
+      }
       STATE.myCards = cards.slice(0, 5);
+      STATE.cardSource = 'scan';
       STATE.pickingRank = null;
       if (STATE.myCards.length === 5) runEval();
       addLog(`Scanned ${cards.length} card(s) from page`);
@@ -605,7 +748,8 @@
     /* ─ selected cards ─ */
     h += `<div style="margin-bottom:6px;">`;
     h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">`;
-    h += `<span style="font-weight:bold;font-size:11px;">Your Hand (${STATE.myCards.length}/5)</span>`;
+    const srcLabel = STATE.cardSource === 'xhr' ? ' (auto)' : STATE.cardSource === 'scan' ? ' (scanned)' : '';
+    h += `<span style="font-weight:bold;font-size:11px;">Your Hand (${STATE.myCards.length}/5)${srcLabel}</span>`;
     if (STATE.myCards.length > 0) {
       h += `<span id="tpda-pk-clear" style="color:#f44;cursor:pointer;font-size:11px;">Clear</span>`;
     }
@@ -618,7 +762,7 @@
       });
       h += `</div>`;
     } else {
-      h += `<div style="color:#666;font-size:11px;">Tap a rank then a suit below, or use Scan</div>`;
+      h += `<div style="color:#666;font-size:11px;">Cards auto-detect when playing, or tap to pick</div>`;
     }
     h += `</div>`;
 
@@ -770,15 +914,39 @@
     }
   }
 
+  /* ── MutationObserver for auto-scan ──────────────────────── */
+  let _scanTimer = null;
+  function startCardObserver() {
+    const target = document.getElementById('mainContainer') || document.body;
+    const observer = new MutationObserver(() => {
+      /* Debounce: wait 500ms after last mutation before scanning */
+      if (_scanTimer) clearTimeout(_scanTimer);
+      _scanTimer = setTimeout(() => {
+        /* Only scan if panel is visible (user has opened the advisor) */
+        const panel = getPanelEl();
+        if (panel && panel.style.display !== 'none') {
+          scanDom();
+        }
+      }, 500);
+    });
+    observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    addLog('Card auto-scan observer started');
+  }
+
   /* ── init ──────────────────────────────────────────────────── */
   function init() {
     ensureStyles();
     createBubble();
     createPanel();
+    startCardObserver();
     window.addEventListener('resize', onResize);
-    addLog('Strip Poker Advisor initialized');
-    console.log('[Strip Poker Advisor] Started.');
+    addLog('Strip Poker Advisor v1.1.0 initialized');
+    console.log('[Strip Poker Advisor] v1.1.0 Started.');
   }
+
+  /* Install network hooks immediately (before DOM is ready) so we catch early game data */
+  hookFetch();
+  hookXHR();
 
   setTimeout(init, 1200);
 })();

@@ -10,11 +10,12 @@
 | Feature | Detail |
 |---------|--------|
 | **Card Picker** | Two-tap entry: tap a rank (2–A), then a suit (♣♦♥♠). Selected cards appear above with tap-to-remove. |
+| **Auto-Detection** | Intercepts XHR/fetch game data to automatically read your hand. Also scans DOM for Torn's CSS-class card format (e.g. `hearts-2`, `spades-K`). MutationObserver triggers auto-scan when new cards appear. |
 | **Hand Evaluator** | Full 5-card poker hand recognition — High Card through Royal Flush. Handles ace-low straights (A-2-3-4-5). |
 | **Win Probability** | Monte Carlo simulation (5 000 random opponent hands) computes Win / Tie / Lose percentages and an effective win % (ties count as half). |
 | **Action Suggestion** | Color-coded recommendation: **RAISE** (≥72%), **CALL** (≥42%), **CAUTION** (≥30%), **FOLD** (<30%). |
 | **Opponent Range** | Collapsible breakdown showing how often the opponent lands each hand type and what % of those beat yours. |
-| **DOM Scan** | "Scan" button attempts to auto-detect cards from the page via image src/alt, data attributes, and suit-symbol text. Falls back to manual input gracefully. |
+| **DOM Scan** | "Scan" button manually triggers DOM card detection. Also runs automatically via MutationObserver when game elements change. Falls back to manual input gracefully. |
 | **Tiny Bubble** | 40 px dark-green circle (♠) — intentionally small so it won't cover the poker screen on mobile/PDA. |
 
 ---
@@ -34,12 +35,11 @@ No API key is needed — the advisor is 100 % client-side math.
 
 1. Open the Strip Poker page in Torn.
 2. Tap the **♠ bubble** to open the panel.
-3. **Enter your 5 cards:**
-   - Tap a rank (2, 3, … K, A) — it highlights green.
-   - Tap a suit (♣ ♦ ♥ ♠) — the card is added.
-   - Already-used suit buttons are greyed out.
+3. **Cards are detected automatically** when the poker game sends data.
+   - The header shows **(auto)** when cards came from game data, **(scanned)** from DOM scan.
+   - You can also **enter cards manually**: tap a rank, then a suit.
+   - Or hit **Scan** to force a DOM re-scan.
    - Tap any selected card to remove it.
-   - Or hit **Scan** to attempt automatic DOM detection.
 4. Once 5 cards are entered, the advisor instantly shows:
    - **Hand name** (e.g. "Two Pair")
    - **Strength bar** with effective win %
@@ -89,7 +89,21 @@ No API key is needed — the advisor is 100 % client-side math.
 - **calcOppRange()** — Same simulation (3 000 samples) bucketed by hand name, tracking which beat the player's hand.
 - **suggest()** — Maps effective win % to one of five action tiers with colour codes.
 
-### DOM Scanning Strategies
+### Card Detection (v1.1.0)
+
+The script uses three complementary methods to detect your poker hand:
+
+| Method | How It Works | Priority |
+|--------|-------------|----------|
+| **XHR/Fetch interception** | Hooks `fetch()` and `XMLHttpRequest` to intercept poker game JSON responses. Looks for `classCode` fields (e.g. `"hearts-2"`, `"spades-K"`). | Highest — installed immediately on script load |
+| **DOM CSS-class scan** | Scans elements with CSS classes matching `hearts-N`, `diamonds-K`, etc. | Medium — runs on Scan button or MutationObserver trigger |
+| **Legacy DOM scan** | Checks `<img>` src/alt, `[data-card]` attributes, and unicode suit symbols in `[class*="card"]` elements | Lowest — fallback strategies |
+
+A `MutationObserver` watches for DOM changes and automatically triggers a scan (debounced 500ms) when the panel is open.
+
+XHR-detected cards take priority over DOM-scanned cards to prevent overwriting accurate game data with potentially noisy DOM reads.
+
+### DOM Scanning Strategies (Legacy)
 
 | Strategy | Selector | Parses |
 |----------|----------|--------|
@@ -119,7 +133,9 @@ Scanning is best-effort. If it finds 1–5 valid cards it applies them; otherwis
 
 ## Limitations
 
+- **XHR interception depends on URL patterns** — The script matches URLs containing `poker`, `stripPoker`, or related `sid`/`action`/`step` parameters. If Torn changes their endpoint naming, the auto-detection may need updating.
 - **DOM scan is heuristic** — Torn's poker page uses React/CSS-module classes that change between builds. If auto-scan stops working, use the manual card picker.
+- **Unknown exact `sid` parameter** — The exact `page.php?sid=` value for strip poker is not confirmed. The script broadly matches poker-related patterns to compensate.
 - **Assumes 5-card poker** — If the game variant changes (e.g. community cards), the evaluator would need to be extended.
 - **NPC strategy not modelled** — Win probability is calculated against a random opponent hand. The actual NPC may fold/bet predictably, which could shift optimal play.
 
@@ -129,5 +145,5 @@ Scanning is best-effort. If it finds 1–5 valid cards it applies them; otherwis
 
 | File | Purpose |
 |------|---------|
-| `torn-strip-poker-bubble.user.js` | The userscript (≈ 785 lines) |
+| `torn-strip-poker-bubble.user.js` | The userscript (≈ 950 lines) |
 | `torn-strip-poker-bubble.md` | This documentation |
