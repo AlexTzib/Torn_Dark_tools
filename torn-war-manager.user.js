@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.3.1
+// @version      1.3.2
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -1741,18 +1741,25 @@
 
     function renderRow(e) {
       const est = e.estimate;
-      let hospNote = '';
-      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
-        hospNote = ` <span style="color:#ffd166;font-size:11px;">\u23F0 ${formatSeconds(e.remainingSec)}</span>`;
+      let timerNote = '';
+      if (e.remainingSec != null) {
+        const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
+        const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
+        const col = timerColors[e.locationBucket] || '#aaa';
+        const icon = timerIcons[e.locationBucket] || '\u23F0';
+        timerNote = ` <span style="color:${col};font-size:11px;">${icon} ${formatSeconds(e.remainingSec)}</span>`;
       }
+      const statusColor = e.isOnline ? '#4caf50' : '#888';
+      const statusDot = e.isOnline ? '\uD83D\uDFE2' : '\u26AA';
       return `
         <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
           <div>
+            <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
             <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
             ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
             ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
             <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
-            ${hospNote}
+            ${timerNote}
           </div>
           <div style="display:flex;gap:4px;">
             <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
