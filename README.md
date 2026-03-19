@@ -21,13 +21,15 @@ Your personal Torn assistant. It pulls your player data via the API and shows a 
 - **Battle Stats** — STR/SPD/DEX/DEF at a glance
 - **Funds** — cash on hand and bank balance
 
-### Deal Finder (Green "DF" bubble)
+### Plushie Prices (Purple teddy bear bubble)
 
-A flip-profit calculator for the Item Market and Bazaar. It scrapes the prices on the current page and calculates whether buying an item and reselling it would be profitable after Torn's 5% market tax. **Makes zero API calls** — it reads prices directly from the page DOM and passively listens to API traffic the app already sends.
+A plushie price comparison tool. Fetches current bazaar and item market floor prices for all 13 Torn plushies and displays them in a sortable table.
 
-- Color-coded deals: green (>$500k profit), yellow (positive), red (loss)
-- Caches floor prices to track market trends
-- Works on both Item Market and Bazaar pages
+- **Sortable price table** — columns for Bazaar, Item Market, and Best price
+- **Best price highlight** — green highlight on whichever source is cheaper
+- **Full set cost** — total cost to buy one of each plushie at the best price
+- **10-minute cache** — avoids unnecessary API calls between checks
+- **API key auto-detection** — works with PDA injection, manual entry, or network interception
 
 ### War Bubble (Red "WAR" bubble)
 
@@ -46,7 +48,7 @@ An enemy faction online tracker for faction wars. Enter (or auto-detect) the ene
 | Script | Bubble | Purpose | API Calls |
 |---|---|---|---|
 | [**AI Advisor**](torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, war timing, drug-free energy plan | Direct API fetching + passive interception |
-| [**Deal Finder**](torn-pda-deal-finder-bubble.md) | Green "DF" | Item Market / Bazaar flip-profit calculator | None — DOM scraping + passive interception |
+| [**Plushie Prices**](torn-pda-deal-finder-bubble.md) | Purple teddy bear | Plushie bazaar vs item market price comparison | `market/{id}?selections=bazaar,itemmarket` (13 calls per refresh) |
 | [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis, attack links | `faction/{id}?selections=basic` (configurable 30s–10min) |
 
 ---
@@ -63,7 +65,7 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 
 ### 2. Minimal Data Footprint
 
-- **Deal Finder** makes **zero** additional network requests. It passively reads API responses that Torn PDA (or the browser) already sends and scrapes visible DOM content.
+- **Plushie Prices** makes **13** API calls per refresh (one per plushie), fetching bazaar and item market listings. Calls are spaced 250ms apart. Prices are cached for 10 minutes.
 - **AI Advisor** makes direct API calls for `user` and `faction` data using the user's own key, and also passively intercepts existing traffic for additional data.
 - **War Bubble** makes **one** read-only API call per polling cycle (configurable: 30s / 1min / 2min / 5min / 10min, only while the panel is open) using the minimum `selections=basic` endpoint.
 
@@ -79,12 +81,11 @@ All scripts that need an API key use a three-tier priority system:
 
 - In **Torn PDA**, the key is loaded automatically — no user action needed.
 - In **Tampermonkey/Greasemonkey**, use the manual entry field (PDA injection is unavailable).
-- **Deal Finder** does not use any API key.
 - The key is **never sent to any external server** — only to `api.torn.com`.
 
 ### 4. Local-Only Data
 
-- No external servers are contacted (other than `api.torn.com` by the War Bubble).
+- No external servers are contacted (other than `api.torn.com`).
 - All cached data lives in the browser's `localStorage` with automatic expiry and size limits.
 - No analytics, telemetry, or tracking of any kind.
 
@@ -92,13 +93,13 @@ All scripts that need an API key use a three-tier priority system:
 
 ## Torn Policy Compliance Summary
 
-| Requirement | AI Advisor | Deal Finder | War Bubble |
+| Requirement | AI Advisor | Plushie Prices | War Bubble |
 |---|---|---|---|
 | No game-action automation | Compliant | Compliant | Compliant |
 | One-click-one-action | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | No key used | PDA key auto-injected; manual fallback; own key only |
-| No external server comms | Only `api.torn.com` | Compliant | Only `api.torn.com` |
-| API rate limits respected | On-demand only | N/A | Configurable 30s–10min (well under 100/min) |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only |
+| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` |
+| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) |
 | No request modification | Compliant | Compliant | Compliant |
 | Read-only display | Compliant | Compliant | Compliant |
 
@@ -182,8 +183,8 @@ Torn_Dark_tools/
 │   └── community-repos.md                 ← Community Torn script repos analysis & learnings
 ├── torn-assistant.user.js                 ← AI Advisor bubble script
 ├── torn-assistant.md                      ← AI Advisor documentation
-├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble script
-├── torn-pda-deal-finder-bubble.md         ← Deal Finder documentation
+├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble script
+├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
 ├── torn-war-bubble.user.js                ← War Online bubble script
 └── torn-war-bubble.md                     ← War Bubble documentation
 ```
@@ -206,17 +207,15 @@ During the review process, the following improvements were made:
 
 6. **Attack buttons (War Bubble):** Each enemy member row has Copy Attack URL, Copy Name, and "Go Attack" link buttons.
 
-7. **Cache expiry (Deal Finder):** Added automatic cache pruning — max 200 items, 7-day TTL — to prevent unbounded `localStorage` growth.
+7. **Plushie Prices v2.0 rewrite:** Completely reworked the Deal Finder into a dedicated plushie price checker. Fetches bazaar and item market prices for all 13 Torn plushies via the Torn API, displays a sortable comparison table with best-price highlighting and full-set cost, with 10-minute price caching.
 
 8. **Timer track cleanup (War Bubble):** Added automatic pruning of the timer-change history — max 500 entries, 7-day TTL — to prevent unbounded `localStorage` growth.
 
-9. **DOM scraping optimization (Deal Finder):** `scrapeListingsFromDom()` now tries targeted CSS selectors first before falling back to the broad `li, tr, div` scan, improving performance on mobile devices.
+9. **Debug log panels (all scripts):** Collapsible log section at the bottom of each panel with timestamped event entries and a "Copy Log" button for sharing during bug reports.
 
-10. **Debug log panels (all scripts):** Collapsible log section at the bottom of each panel with timestamped event entries and a "Copy Log" button for sharing during bug reports.
+10. **API response normalization (AI Advisor):** Torn API v1 returns bars (`energy`, `nerve`, etc.), battle stats, and money at the top level — not nested under wrapper objects. `mergeUserData()` now normalizes both V1 (flat) and V2 (nested with `.value` properties) response formats into the `user.bars`, `user.battlestats`, and `user.money` structures the rendering code expects. Also handles PDA-intercepted V2 calls. Fixed energy/stats showing 0/0.
 
-11. **API response normalization (AI Advisor):** Torn API v1 returns bars (`energy`, `nerve`, etc.), battle stats, and money at the top level — not nested under wrapper objects. `mergeUserData()` now normalizes both V1 (flat) and V2 (nested with `.value` properties) response formats into the `user.bars`, `user.battlestats`, and `user.money` structures the rendering code expects. Also handles PDA-intercepted V2 calls. Fixed energy/stats showing 0/0.
-
-12. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
+11. **Line ending normalization:** Converted all files from CRLF to LF for cross-platform consistency.
 
 ---
 

@@ -1,84 +1,113 @@
-# Torn PDA - Deal Finder Bubble
+# Torn PDA - Plushie Prices
 
 ## Overview
 
-A local-only deal-finding overlay for [Torn City](https://www.torn.com) that runs inside **Torn PDA** (or any Tampermonkey/Greasemonkey-compatible browser).
-It displays a draggable bubble that expands into a panel showing potential flip profits on the **Item Market** and **Bazaar** pages, accounting for the standard 5% item-market sales tax.
+A plushie price comparison overlay for [Torn City](https://www.torn.com) that runs inside **Torn PDA** (or any Tampermonkey/Greasemonkey-compatible browser).
+It displays a draggable bubble that expands into a panel showing current **bazaar** and **item market** floor prices for all 13 Torn plushies, with sortable columns and a full-set cost total.
 
-**The script is strictly read-only. It never buys, sells, lists, or performs any game action on the player's behalf.**
+**The script is read-only. It never buys, sells, lists, or performs any game action on the player's behalf.**
 
 ## Features
 
-| Feature | Description |
-|---|---|
-| **Page context detection** | Automatically identifies whether the current page is an Item Market or Bazaar listing |
-| **DOM listing scraper** | Extracts visible item prices and quantities from the current page |
-| **Flip profit calculator** | Computes net profit after the 5% item-market tax for each visible listing |
-| **Cross-market comparison** | Compares bazaar prices against cached item-market floor prices (or market value) to find arbitrage opportunities |
-| **Price cache** | Remembers floor prices across page visits to enable cross-market deal evaluation |
-| **Deal classification** | Color-codes deals: green (> $500k profit), yellow (positive but small), red (negative) |
-| **Debug log** | Collapsible log panel with timestamped events and a "Copy Log" button for bug reporting |
+|| Feature | Description |
+||---|---|
+|| **All 13 plushies** | Tracks Sheep, Teddy Bear, Kitten, Jaguar, Wolverine, Nessie, Red Fox, Monkey, Chamois, Panda, Lion, Camel, and Stingray plushies |
+|| **Bazaar floor prices** | Fetches the lowest bazaar listing for each plushie via the Torn API |
+|| **Item Market floor prices** | Fetches the lowest item market listing for each plushie via the Torn API |
+|| **Best price highlight** | Green highlight on whichever source (bazaar or item market) has the lower price |
+|| **Full set cost** | Bottom row shows the total cost to buy one of each plushie at the best available price |
+|| **Sortable columns** | Click any column header (Plushie, Bazaar, Market, Best) to sort ascending/descending |
+|| **Auto-refresh** | Prices auto-fetch when the panel is opened and cache is stale (10-minute TTL) |
+|| **API key auto-detection** | Captures API key from PDA injection, manual entry, or network traffic interception |
+|| **Price cache** | Caches fetched prices in `localStorage` with 10-minute TTL to avoid unnecessary API calls |
+|| **Debug log** | Collapsible log panel with timestamped events and a "Copy" button for bug reporting |
 
 ## How It Works
 
 ```
-┌──────────────────────────────┐
-│     Torn Item Market or      │
-│     Bazaar page loads        │
-│                              │
-│   ┌─────────────────────┐    │    ┌─────────────────────┐
-│   │  DOM listing scraper │───────▶│  scrapeListingsFromDom│
-│   │  (reads prices from  │    │    │  (parses $, qty,     │
-│   │   visible elements)  │    │    │   seller text)       │
-│   └─────────────────────┘    │    └──────────┬──────────┘
-│                              │               │
-│   ┌─────────────────────┐    │    ┌──────────▼──────────┐
-│   │  hookFetch / hookXHR │───────▶│  Price cache update  │
-│   │  (passive API sniff) │    │    │  (localStorage)      │
-│   └─────────────────────┘    │    └──────────┬──────────┘
-│                              │               │
-└──────────────────────────────┘    ┌──────────▼──────────┐
-                                    │  Deal calculation    │
-                                    │  • net after 5% tax  │
-                                    │  • profit & ROI %    │
-                                    └──────────┬──────────┘
-                                               │
-                                    ┌──────────▼──────────┐
-                                    │  renderPanel()       │
-                                    │  (sorted deal list)  │
-                                    └─────────────────────┘
+┌───────────────────────────────────────────────┐
+│  User taps bubble → panel opens               │
+│                                               │
+│  ┌──────────────┐    ┌─────────────────────┐  │
+│  │ API key       │───▶│ fetchAllPrices()     │  │
+│  │ (PDA/manual/  │    │ 13 sequential calls  │  │
+│  │  intercepted) │    │ 250ms apart          │  │
+│  └──────────────┘    └────────┬────────────┘  │
+│                               │               │
+│              For each plushie:│               │
+│              api.torn.com/market/{id}         │
+│              ?selections=bazaar,itemmarket    │
+│                               │               │
+│                    ┌──────────▼──────────┐    │
+│                    │ Extract floor prices │    │
+│                    │ bazaar[0].cost       │    │
+│                    │ itemmarket[0].cost   │    │
+│                    └──────────┬──────────┘    │
+│                               │               │
+│                    ┌──────────▼──────────┐    │
+│                    │ renderPanel()        │    │
+│                    │ Sortable price table │    │
+│                    │ + full set total     │    │
+│                    └─────────────────────┘    │
+└───────────────────────────────────────────────┘
 ```
 
-### Item Market Mode
-When viewing an item-market listing, the script compares the **cheapest visible listing** against the **second-cheapest** to identify quick undercut flips.
+### Price Table
 
-### Bazaar Mode
-When viewing a bazaar, the script compares bazaar listing prices against:
-1. The **cached item-market floor** (if the user previously visited the same item on the item market), or
-2. The **market value** shown on the page
+For each of the 13 plushies, the table shows:
+- **Bazaar** — Lowest price from any player bazaar
+- **Market** — Lowest price from the item market
+- **Best** — The lower of the two (highlighted in green)
 
-Profit is calculated as: `net_sell_price - buy_price`, where `net_sell_price = gross_price × (1 - 0.05)`.
+The cheapest source for each plushie is highlighted. A "Full Set (13)" row at the bottom shows the total cost to buy one of each at the best price.
+
+### API Calls
+
+The script makes **13 API calls** per refresh (one per plushie), each fetching both bazaar and item market listings:
+```
+GET https://api.torn.com/market/{plushie_id}?selections=bazaar,itemmarket&key={key}
+```
+
+Calls are made sequentially with a 250ms delay between them to stay well within Torn's rate limit (~100 requests/minute). A full refresh takes approximately 3-4 seconds.
+
+## Plushie IDs
+
+|| ID | Name |
+||---|---|
+|| 186 | Sheep Plushie |
+|| 187 | Teddy Bear Plushie |
+|| 215 | Kitten Plushie |
+|| 258 | Jaguar Plushie |
+|| 261 | Wolverine Plushie |
+|| 266 | Nessie Plushie |
+|| 268 | Red Fox Plushie |
+|| 269 | Monkey Plushie |
+|| 273 | Chamois Plushie |
+|| 274 | Panda Plushie |
+|| 281 | Lion Plushie |
+|| 384 | Camel Plushie |
+|| 618 | Stingray Plushie |
 
 ## Data Sources
 
-| Source | Method | Notes |
-|---|---|---|
-| Visible listing prices | DOM scraping | Parses price text from listing elements; uses targeted CSS selectors with a broad fallback |
-| Item market floor, bazaar floor, market value | Passive fetch/XHR interception + DOM scraping | Cached in `localStorage` per item (max 200 items, 7-day expiry) |
-| User / torn market API data | Passive fetch/XHR interception | Reads responses the app already makes |
+|| Source | Method | Notes |
+||---|---|---|
+|| Plushie bazaar prices | Direct API fetch (`market/{id}?selections=bazaar`) | Returns sorted listings; script takes `[0].cost` as floor |
+|| Plushie item market prices | Direct API fetch (`market/{id}?selections=itemmarket`) | Same approach — floor from first listing |
+|| API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance
 
-| Rule | Status |
-|---|---|
-| No automation of game actions | Fully compliant — the script never buys, sells, lists, or clicks any game button |
-| One-click-one-action principle | Fully compliant — no game actions are triggered |
-| Read-only data display | Fully compliant — all data shown is derived from visible page content and passively intercepted API responses |
-| No API key extraction | Fully compliant — the script does not read, store, or transmit any API key |
-| No external server communication | Fully compliant — zero outbound network requests |
-| DOM scraping for display | Allowed — standard technique used by all major Torn community scripts |
-| Passive fetch/XHR interception | Tolerated pattern — same technique used by TornTools and other community scripts |
-| localStorage usage | Price cache (max 200 items, 7-day TTL) and UI positions only |
+|| Rule | Status |
+||---|---|
+|| No automation of game actions | Fully compliant — the script never buys, sells, lists, or clicks any game button |
+|| One-click-one-action principle | Fully compliant — no game actions are triggered |
+|| Read-only data display | Fully compliant — all data shown is price information from the Torn API |
+|| API key handling | User's own key only; stored locally in `localStorage`; never sent externally |
+|| No external server communication | Fully compliant — only contacts `api.torn.com` |
+|| API rate limits | 13 calls per refresh, 250ms apart (~52/min); well under the 100/min limit |
+|| Passive fetch/XHR interception | Used only to capture API key from existing traffic; does not modify requests |
+|| localStorage usage | Price cache (10-min TTL), API key, and UI positions only |
 
 ## Installation
 
@@ -94,17 +123,19 @@ Profit is calculated as: `net_sell_price - buy_price`, where `net_sell_price = g
 1. Install the Tampermonkey or Greasemonkey browser extension
 2. Create a new script and paste the contents of `torn-pda-deal-finder-bubble.user.js`
 3. Save — the script will activate on all `torn.com` pages
+4. Open the panel and enter your Torn API key (16 characters) in the key field
 
 ## UI Controls
 
-- **Bubble (green, "DF")** — tap to expand; drag to reposition
-- **Refresh** button — re-scans the current page DOM and recalculates deals
+- **Bubble (purple, teddy bear emoji)** — tap to expand; drag to reposition
+- **Refresh** button — re-fetches all 13 plushie prices from the API
 - **○** button — collapses the panel back to the bubble
-- **Debug Log** section — tap the header to expand; "Copy Log" copies all entries to clipboard
+- **Column headers** — click to sort by that column (toggle ascending/descending)
+- **Log** section — tap the header to expand; "Copy" copies all entries to clipboard
 
 ## Limitations
 
-- DOM scraping is inherently fragile — Torn page structure changes may require selector updates.
-- Bazaar deal detection requires a prior visit to the same item's Item Market page to cache the floor price.
-- The profit estimate does **not** include the optional anonymous-listing fee.
-- The script shows deals based on **currently visible** listings only — it cannot see listings that haven't been rendered in the DOM yet.
+- Requires an API key (unlike the old Deal Finder which was DOM-scraping-only).
+- Each refresh makes 13 API calls. Avoid spamming the Refresh button.
+- Prices are a snapshot — they can change between the first and last API call in a refresh cycle.
+- The 10-minute cache TTL means prices may be slightly stale if checked within the cache window without refreshing.

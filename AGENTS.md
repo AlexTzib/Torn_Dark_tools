@@ -35,8 +35,8 @@ Torn_Dark_tools/
 │   └── community-repos.md                 ← Community Torn script repos analysis & learnings
 ├── torn-assistant.user.js                 ← AI Advisor bubble (~1517 lines)
 ├── torn-assistant.md                      ← AI Advisor documentation
-├── torn-pda-deal-finder-bubble.user.js    ← Deal Finder bubble (~968 lines)
-├── torn-pda-deal-finder-bubble.md         ← Deal Finder documentation
+├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~740 lines)
+├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
 ├── torn-war-bubble.user.js                ← War Bubble (~1249 lines)
 └── torn-war-bubble.md                     ← War Bubble documentation
 ```
@@ -257,7 +257,7 @@ Each script uses a unique z-index base so they can coexist:
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
 | War Bubble | 999970 | `tpda-war-online-bubble` | `tpda-war-online-panel` |
-| Deal Finder | 999980 | `tpda-deal-finder-bubble` | `tpda-deal-finder-panel` |
+| Plushie Prices | 999980 | `tpda-plushie-bubble` | `tpda-plushie-panel` |
 | AI Advisor | 999990 | `tpda-safe-ai-bubble` | `tpda-safe-ai-panel` |
 
 When adding a new script, pick a z-index base that doesn't collide (e.g., 999960).
@@ -269,7 +269,7 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | Script | SCRIPT_KEY | Keys Used |
 |---|---|---|
 | AI Advisor | `tpda_safe_ai_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos` |
-| Deal Finder | `tpda_deal_finder_bubble_v1` | `_bubble_pos`, `_panel_pos`, `_price_cache` |
+| Plushie Prices | `tpda_plushie_prices_v1` | `_apikey`, `_bubble_pos`, `_panel_pos`, `_prices` |
 | War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval` |
 
 ### Debug Log Pattern
@@ -334,24 +334,30 @@ Every script has:
 
 **Hard-coded data:** `STOCK_RULES` object maps stock tickers to share thresholds, benefit types, frequencies, and benefit descriptions.
 
-### Deal Finder (`torn-pda-deal-finder-bubble.user.js`)
+### Plushie Prices (`torn-pda-deal-finder-bubble.user.js`)
 
-**Purpose:** Item Market / Bazaar flip-profit calculator.
+**Purpose:** Plushie bazaar vs item market price comparison table.
+
+**Key constants:**
+- `PLUSHIES` — Array of 13 objects `{ id, name }` for all Torn plushies (IDs: 186, 187, 215, 258, 261, 266, 268, 269, 273, 274, 281, 384, 618)
+- `API_DELAY_MS` — 250ms delay between API calls
+- `CACHE_TTL_MS` — 10 minutes
 
 **Key functions:**
-- `scanCurrentPage()` — Detects page context (item market vs bazaar), scrapes DOM listings, calculates deals
-- `scrapeListingsFromDom()` — Extracts prices from visible page elements (targeted selectors first, broad fallback)
-- `updatePriceCache(itemKey, context, floor)` — Caches floor prices per item (max 200, 7-day TTL)
-- `handleApiPayload(url, data)` — Processes passively intercepted API responses
+- `fetchMarketData(itemId)` — Fetches `api.torn.com/market/{id}?selections=bazaar,itemmarket`
+- `fetchAllPrices(force)` — Sequentially fetches all 13 plushie prices with 250ms delay, updates UI mid-fetch
+- `getSortedPlushies()` — Returns plushie rows sorted by the current sort column/direction
+- `renderPanel()` — Renders API key input (if needed), status bar, sortable price table, and debug log
+- `handleApiPayload(url, data)` — Extracts API key from passively intercepted traffic
 
 **Data flow:**
-1. No API key needed
-2. `hookFetch`/`hookXHR` intercepts user/torn API responses for market values
-3. User clicks Refresh → `scanCurrentPage()` scrapes DOM
-4. Deals calculated: `net_sell = gross × 0.95`, profit = net_sell - buy_price
-5. Color-coded: green (>$500k), yellow (positive), red (negative)
+1. API key resolved (saved → network-intercepted → manual entry)
+2. On panel open: loads cached prices, auto-fetches if cache older than 10 minutes
+3. `fetchAllPrices()` calls `market/{id}?selections=bazaar,itemmarket` for each plushie
+4. Extracts `bazaar[0].cost` and `itemmarket[0].cost` as floor prices
+5. `renderPanel()` displays sortable table with Bazaar, Market, Best columns and full-set total
 
-**No direct API calls.** Pure DOM scraping + passive interception.
+**No DOM scraping.** All data comes from direct Torn API market endpoint calls.
 
 ### War Bubble (`torn-war-bubble.user.js`)
 
@@ -605,7 +611,8 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 |---|---|---|---|
 | `user` | `bars,cooldowns,battlestats,stocks,money,profile` | AI Advisor | Player status, bars, cooldowns, money |
 | `faction` | `basic` | AI Advisor, War Bubble | Faction members, war status |
-| `torn` | (various, intercepted) | AI Advisor, Deal Finder | Market data, item values |
+| `market` | `bazaar,itemmarket` | Plushie Prices | Bazaar and item market floor prices per item |
+| `torn` | (various, intercepted) | AI Advisor | Market data, item values |
 
 ### Rate Limits
 
@@ -613,7 +620,7 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 - Our scripts stay well under this:
   - AI Advisor: on-demand only (init + manual refresh)
   - War Bubble: configurable 30s–10min intervals, only when panel is open
-  - Deal Finder: zero direct API calls
+  - Plushie Prices: 13 calls per refresh, 250ms apart (~52/min), cached for 10 minutes
 
 ### Key API Response Fields (Faction Basic)
 
