@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.3.0
+// @version      1.3.1
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -1473,6 +1473,14 @@
 
     const body = document.getElementById('tpda-war-mgr-body');
     body.addEventListener('click', (e) => {
+      // Report refresh button
+      const reportRefresh = e.target.closest('.tpda-mgr-report-refresh');
+      if (reportRefresh) {
+        reportRefresh.textContent = '...';
+        refreshAll();
+        return;
+      }
+
       // Copy buttons
       const copyBtn = e.target.closest('.tpda-mgr-copy-btn');
       if (copyBtn) {
@@ -1709,10 +1717,19 @@
   }
 
   function renderOnlineEnemyReport(enemyOnline) {
+    const lastFetchLabel = STATE.lastFetchTs ? ageText(STATE.lastFetchTs) : 'never';
+
     if (!enemyOnline.length) {
       return `
         <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-          <div style="font-weight:bold;margin-bottom:6px;">\uD83D\uDFE2 Enemy Online Report</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="font-weight:bold;">\uD83D\uDFE2 Enemy Online Report</div>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
+              <button class="tpda-mgr-report-refresh"
+                      style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
+            </div>
+          </div>
           <div class="mgr-muted">No enemy members currently online.</div>
         </div>`;
     }
@@ -1762,12 +1779,17 @@
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
           <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Online Report (${enemyOnline.length})</div>
-          <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateOnlineReport(enemyOnline))}"
-                  style="font-size:11px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-            Copy List
-          </button>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
+            <button class="tpda-mgr-report-refresh"
+                    style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateOnlineReport(enemyOnline))}"
+                    style="font-size:11px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy List
+            </button>
+          </div>
         </div>
         <div style="max-height:250px;overflow-y:auto;">
           ${rows}
