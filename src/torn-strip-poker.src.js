@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn PDA - Strip Poker Advisor
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      1.1.0
-// @description  Compact poker hand advisor for Torn Strip Poker. Tap-to-pick cards, evaluates hand strength via Monte Carlo simulation, and suggests optimal play. Tiny bubble won't block the pocket screen.
+// @version      2.0.0
+// @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -41,9 +41,11 @@
 
   /* ── state ─────────────────────────────────────────────────── */
   const STATE = {
-    myCards: [],
+    myCards: [],       /* hole cards (0-2) */
+    tableCards: [],    /* community cards (0-5) */
     cardSource: null, /* 'xhr', 'scan', 'manual' — tracks how cards were set */
     pickingRank: null,
+    pickTarget: 'hole', /* 'hole' or 'table' — which set the picker adds to */
     handEval: null,
     winProb: null,
     suggestion: null,
@@ -87,10 +89,10 @@
   /* ── XHR / fetch interception for poker game data ──────────── */
   function handlePokerPayload(data) {
     if (!data || typeof data !== 'object') return;
-    const cards = [];
 
     function extractCards(info) {
-      if (!info) return;
+      const cards = [];
+      if (!info) return cards;
       if (Array.isArray(info)) {
         info.forEach(c => {
           const parsed = parseClassCode(c.classCode || c.class_code);
@@ -100,27 +102,42 @@
         const parsed = parseClassCode(info.classCode || info.class_code);
         if (parsed) cards.push(parsed);
       }
+      return cards;
     }
 
-    /* Torn casino patterns: data.player.hand, data.currentGame[].playerCardInfo, data.yourCards, etc. */
-    if (data.player?.hand) extractCards(data.player.hand);
-    if (data.yourCards) extractCards(data.yourCards);
-    if (data.yourHand) extractCards(data.yourHand);
-    if (data.hand) extractCards(data.hand);
-    if (Array.isArray(data.currentGame)) {
+    let holeCards = [];
+    let communityCards = [];
+
+    /* Try structured Hold'em fields first */
+    if (data.player?.hand)   holeCards = extractCards(data.player.hand);
+    if (data.yourCards)       holeCards = holeCards.length ? holeCards : extractCards(data.yourCards);
+    if (data.yourHand)       holeCards = holeCards.length ? holeCards : extractCards(data.yourHand);
+    if (data.hand)           holeCards = holeCards.length ? holeCards : extractCards(data.hand);
+
+    /* Community / table cards */
+    if (data.community)      communityCards = extractCards(data.community);
+    if (data.communityCards) communityCards = communityCards.length ? communityCards : extractCards(data.communityCards);
+    if (data.table?.cards)   communityCards = communityCards.length ? communityCards : extractCards(data.table.cards);
+    if (data.tableCards)     communityCards = communityCards.length ? communityCards : extractCards(data.tableCards);
+    if (data.board)          communityCards = communityCards.length ? communityCards : extractCards(data.board);
+
+    /* currentGame array fallback */
+    if (holeCards.length === 0 && Array.isArray(data.currentGame)) {
       data.currentGame.forEach(g => {
-        if (g.playerCardInfo) extractCards([g.playerCardInfo]);
+        if (g.playerCardInfo) holeCards.push(...extractCards([g.playerCardInfo]));
       });
     }
-    /* Fallback: scan all arrays for classCode objects */
-    if (cards.length === 0) {
+
+    /* Deep scan fallback: try to find classCode objects */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const all = [];
       const scan = (obj, depth) => {
         if (depth > 3 || !obj || typeof obj !== 'object') return;
         if (Array.isArray(obj)) {
           for (const item of obj) {
             if (item && (item.classCode || item.class_code)) {
               const p = parseClassCode(item.classCode || item.class_code);
-              if (p) cards.push(p);
+              if (p) all.push(p);
             } else {
               scan(item, depth + 1);
             }
@@ -130,23 +147,35 @@
         }
       };
       scan(data, 0);
+      /* Heuristic: first 2 unique cards are hole, rest are community */
+      const seen = new Set();
+      for (const c of all) {
+        const k = cardKey(c);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (holeCards.length < 2) holeCards.push(c);
+        else if (communityCards.length < 5) communityCards.push(c);
+      }
     }
 
-    if (cards.length >= 1 && cards.length <= 10) {
-      /* Take at most 5 unique cards (player hand) */
+    /* Deduplicate */
+    function dedup(arr) {
       const seen = new Set();
-      const unique = [];
-      for (const c of cards) {
-        const k = cardKey(c);
-        if (!seen.has(k)) { seen.add(k); unique.push(c); }
-        if (unique.length >= 5) break;
-      }
-      STATE.myCards = unique;
+      return arr.filter(c => { const k = cardKey(c); if (seen.has(k)) return false; seen.add(k); return true; });
+    }
+    holeCards = dedup(holeCards).slice(0, 2);
+    communityCards = dedup(communityCards).slice(0, 5);
+
+    if (holeCards.length >= 1) {
+      STATE.myCards = holeCards;
+      STATE.tableCards = communityCards;
       STATE.cardSource = 'xhr';
       STATE.pickingRank = null;
-      if (unique.length === 5) runEval();
+      STATE.pickTarget = holeCards.length >= 2 ? 'table' : 'hole';
+      const total = holeCards.length + communityCards.length;
+      if (holeCards.length >= 2 && total >= 5) runEval();
       else { STATE.handEval = null; STATE.winProb = null; STATE.suggestion = suggest(null); STATE.oppRange = null; }
-      addLog(`Auto-detected ${unique.length} card(s) from game data`);
+      addLog(`Auto-detected ${holeCards.length} hole + ${communityCards.length} community card(s)`);
       renderPanel();
     }
   }
@@ -154,7 +183,9 @@
   function isPokerUrl(url) {
     return /sid=.*poker/i.test(url) || /poker.*Data/i.test(url) ||
            /stripPoker/i.test(url) || /step=.*poker/i.test(url) ||
-           /action=.*poker/i.test(url);
+           /action=.*poker/i.test(url) ||
+           /sid=.*holdem/i.test(url) || /holdem/i.test(url) ||
+           /poker.*action/i.test(url);
   }
 
   function hookFetch() {
@@ -257,7 +288,24 @@
     return { rank, name, score };
   }
 
-  /* ── Monte Carlo win probability ───────────────────────────── */
+  /* ── best hand from N cards (Hold'em: best 5 of up to 7) ──── */
+  function bestOfN(cards) {
+    if (cards.length < 5) return null;
+    if (cards.length === 5) return evaluate5(cards);
+    let best = null;
+    const n = cards.length;
+    for (let i = 0; i < n - 4; i++)
+      for (let j = i + 1; j < n - 3; j++)
+        for (let k = j + 1; k < n - 2; k++)
+          for (let l = k + 1; l < n - 1; l++)
+            for (let m = l + 1; m < n; m++) {
+              const ev = evaluate5([cards[i], cards[j], cards[k], cards[l], cards[m]]);
+              if (!best || ev.score > best.score) best = ev;
+            }
+    return best;
+  }
+
+  /* ── Monte Carlo win probability (Hold'em) ─────────────────── */
   function buildDeck(exclude) {
     const ex = new Set(exclude.map(cardKey));
     const deck = [];
@@ -278,15 +326,23 @@
     return a.slice(0, n);
   }
 
-  function calcWinProb(myCards) {
-    const myEval = evaluate5(myCards);
-    if (!myEval) return null;
-    const deck = buildDeck(myCards);
+  function calcWinProb(holeCards, communityCards) {
+    const allKnown = [...holeCards, ...communityCards];
+    const deck = buildDeck(allKnown);
+    const communityNeeded = 5 - communityCards.length;
     let wins = 0, ties = 0;
     for (let i = 0; i < MC_ITERATIONS; i++) {
-      const opp = shuffleDraw(deck, 5);
-      const oppEval = evaluate5(opp);
-      if (!oppEval) continue;
+      /* Draw remaining community cards + 2 opponent hole cards */
+      const drawn = shuffleDraw(deck, communityNeeded + 2);
+      const fullCommunity = [...communityCards, ...drawn.slice(0, communityNeeded)];
+      const oppHole = drawn.slice(communityNeeded, communityNeeded + 2);
+
+      const myAll  = [...holeCards, ...fullCommunity];
+      const oppAll = [...oppHole,  ...fullCommunity];
+
+      const myEval  = bestOfN(myAll);
+      const oppEval = bestOfN(oppAll);
+      if (!myEval || !oppEval) continue;
       if (myEval.score > oppEval.score) wins++;
       else if (myEval.score === oppEval.score) ties++;
     }
@@ -297,27 +353,34 @@
     };
   }
 
-  /* ── opponent range analysis ───────────────────────────────── */
-  function calcOppRange(myCards) {
-    const myEval = evaluate5(myCards);
-    if (!myEval) return null;
-    const deck = buildDeck(myCards);
+  /* ── opponent range analysis (Hold'em) ─────────────────────── */
+  function calcOppRange(holeCards, communityCards) {
+    const allKnown = [...holeCards, ...communityCards];
+    const deck = buildDeck(allKnown);
+    const communityNeeded = 5 - communityCards.length;
     const range = {};
     for (const n of HAND_NAMES) range[n] = { total: 0, beats: 0 };
     const samples = 3000;
     for (let i = 0; i < samples; i++) {
-      const opp = shuffleDraw(deck, 5);
-      const ev = evaluate5(opp);
-      if (!ev) continue;
-      range[ev.name].total++;
-      if (ev.score > myEval.score) range[ev.name].beats++;
+      const drawn = shuffleDraw(deck, communityNeeded + 2);
+      const fullCommunity = [...communityCards, ...drawn.slice(0, communityNeeded)];
+      const oppHole = drawn.slice(communityNeeded, communityNeeded + 2);
+
+      const myAll  = [...holeCards, ...fullCommunity];
+      const oppAll = [...oppHole,  ...fullCommunity];
+
+      const myEv  = bestOfN(myAll);
+      const oppEv = bestOfN(oppAll);
+      if (!myEv || !oppEv) continue;
+      range[oppEv.name].total++;
+      if (oppEv.score > myEv.score) range[oppEv.name].beats++;
     }
     return range;
   }
 
   /* ── action suggestion ─────────────────────────────────────── */
   function suggest(prob) {
-    if (!prob) return { act: '?', color: '#888', desc: 'Enter 5 cards to evaluate' };
+    if (!prob) return { act: '?', color: '#888', desc: 'Enter your hole cards + community cards' };
     const wp = prob.win + prob.tie * 0.5;
     if (wp >= 0.72) return { act: 'RAISE',   color: '#4caf50', desc: 'Strong hand \u2014 raise confidently' };
     if (wp >= 0.55) return { act: 'CALL',    color: '#8bc34a', desc: 'Good hand \u2014 play it' };
@@ -326,35 +389,51 @@
     return                  { act: 'FOLD',    color: '#f44336', desc: 'Very weak \u2014 fold' };
   }
 
-  /* ── run full evaluation ───────────────────────────────────── */
+  /* ── run full evaluation (Hold'em) ─────────────────────────── */
   function runEval() {
-    if (STATE.myCards.length < 5) {
-      STATE.handEval = null;
+    const allCards = [...STATE.myCards, ...STATE.tableCards];
+    if (STATE.myCards.length < 2 || allCards.length < 5) {
+      /* Can evaluate current best hand for display, but need at least 2 hole + 3 community for full eval */
+      STATE.handEval = allCards.length >= 5 ? bestOfN(allCards) : null;
       STATE.winProb  = null;
       STATE.suggestion = suggest(null);
       STATE.oppRange = null;
       return;
     }
-    STATE.handEval   = evaluate5(STATE.myCards);
-    STATE.winProb    = calcWinProb(STATE.myCards);
+    STATE.handEval   = bestOfN(allCards);
+    STATE.winProb    = calcWinProb(STATE.myCards, STATE.tableCards);
     STATE.suggestion = suggest(STATE.winProb);
-    STATE.oppRange   = calcOppRange(STATE.myCards);
+    STATE.oppRange   = calcOppRange(STATE.myCards, STATE.tableCards);
     addLog(`Hand: ${STATE.handEval?.name} | Win: ${Math.round(STATE.winProb.win * 100)}% | ${STATE.suggestion.act}`);
   }
 
-  /* ── card add / remove / clear ─────────────────────────────── */
+  /* ── card add / remove / clear (Hold'em) ────────────────────── */
+  function allCards() { return [...STATE.myCards, ...STATE.tableCards]; }
+
   function addCard(rank, suit) {
-    if (STATE.myCards.length >= 5) return;
-    if (STATE.myCards.some(c => cardKey(c) === rank + suit)) return;
-    STATE.myCards.push({ rank, suit, value: RANK_VAL[rank] });
+    const key = rank + suit;
+    if (allCards().some(c => cardKey(c) === key)) {
+      addLog(`Card ${rank}${SUIT_SYM[suit] || suit} already selected`);
+      return;
+    }
+    const card = { rank, suit, value: RANK_VAL[rank] };
+    if (STATE.pickTarget === 'hole' && STATE.myCards.length < 2) {
+      STATE.myCards.push(card);
+    } else if (STATE.tableCards.length < 5) {
+      STATE.tableCards.push(card);
+      /* Auto-switch to table after hole is full */
+      if (STATE.pickTarget === 'hole' && STATE.myCards.length >= 2) STATE.pickTarget = 'table';
+    } else return;
     STATE.cardSource = 'manual';
     STATE.pickingRank = null;
-    if (STATE.myCards.length === 5) runEval();
+    const total = allCards().length;
+    if (STATE.myCards.length >= 2 && total >= 5) runEval();
     renderPanel();
   }
 
-  function removeCard(idx) {
-    STATE.myCards.splice(idx, 1);
+  function removeCard(source, idx) {
+    if (source === 'hole') STATE.myCards.splice(idx, 1);
+    else STATE.tableCards.splice(idx, 1);
     STATE.handEval = null;
     STATE.winProb  = null;
     STATE.suggestion = suggest(null);
@@ -364,8 +443,10 @@
 
   function clearCards() {
     STATE.myCards = [];
+    STATE.tableCards = [];
     STATE.cardSource = null;
     STATE.pickingRank = null;
+    STATE.pickTarget = 'hole';
     STATE.handEval = null;
     STATE.winProb  = null;
     STATE.suggestion = suggest(null);
@@ -373,7 +454,7 @@
     renderPanel();
   }
 
-  /* ── DOM scanning (best-effort) ────────────────────────────── */
+  /* ── DOM scanning (best-effort, Hold'em aware) ──────────────── */
   function scanDom() {
     const cards = [];
     const seen  = new Set();
@@ -389,13 +470,16 @@
       cards.push({ rank, suit, value: RANK_VAL[rank] });
     }
 
-    document.querySelectorAll('img').forEach(img => {
-      const src = (img.src || '') + ' ' + (img.alt || '');
-      if (src.includes('back') || src.includes('blank')) return;
-      const m = src.match(/([2-9]|10|[jJqQkKaA])[\s_-]?(?:of[\s_-]?)?([cCdDhHsS])/);
-      if (m) tryAdd(m[1], m[2]);
-      const m2 = src.match(/([cdhs])[\s_-]?([2-9]|10|[jqka])/i);
-      if (m2) tryAdd(m2[2], m2[1]);
+    /* Torn casino CSS-class card format: elements with class like "hearts-2", "spades-K" */
+    document.querySelectorAll('[class*="hearts-"],[class*="diamonds-"],[class*="clubs-"],[class*="spades-"]').forEach(el => {
+      const cls = el.className || '';
+      const matches = cls.match(/\b(hearts|diamonds|clubs|spades)-(\d+|[JQKA])\b/gi);
+      if (matches) {
+        matches.forEach(cc => {
+          const parsed = parseClassCode(cc);
+          if (parsed) tryAdd(parsed.rank, parsed.suit);
+        });
+      }
     });
 
     document.querySelectorAll('[data-card],[data-rank]').forEach(el => {
@@ -404,6 +488,15 @@
         if (m) tryAdd(m[1], m[2]);
       }
       if (el.dataset.rank && el.dataset.suit) tryAdd(el.dataset.rank, el.dataset.suit);
+    });
+
+    document.querySelectorAll('img').forEach(img => {
+      const src = (img.src || '') + ' ' + (img.alt || '');
+      if (src.includes('back') || src.includes('blank')) return;
+      const m = src.match(/([2-9]|10|[jJqQkKaA])[\s_-]?(?:of[\s_-]?)?([cCdDhHsS])/);
+      if (m) tryAdd(m[1], m[2]);
+      const m2 = src.match(/([cdhs])[\s_-]?([2-9]|10|[jqka])/i);
+      if (m2) tryAdd(m2[2], m2[1]);
     });
 
     const symMap = { '\u2663': 'c', '\u2666': 'd', '\u2665': 'h', '\u2660': 's' };
@@ -419,29 +512,21 @@
       }
     });
 
-    /* Torn casino CSS-class card format: elements with class like "hearts-2", "spades-K" */
-    document.querySelectorAll('[class*="hearts-"],[class*="diamonds-"],[class*="clubs-"],[class*="spades-"]').forEach(el => {
-      const cls = el.className || '';
-      const matches = cls.match(/\b(hearts|diamonds|clubs|spades)-(\d+|[JQKA])\b/gi);
-      if (matches) {
-        matches.forEach(cc => {
-          const parsed = parseClassCode(cc);
-          if (parsed) tryAdd(parsed.rank, parsed.suit);
-        });
-      }
-    });
-
-    if (cards.length > 0 && cards.length <= 5) {
+    if (cards.length > 0 && cards.length <= 7) {
       /* Don't overwrite XHR-detected hand with fewer DOM-scanned cards */
-      if (STATE.cardSource === 'xhr' && STATE.myCards.length >= cards.length) {
+      const currentTotal = STATE.myCards.length + STATE.tableCards.length;
+      if (STATE.cardSource === 'xhr' && currentTotal >= cards.length) {
         addLog(`Scan: ${cards.length} card(s) found but XHR data preferred`);
         return;
       }
-      STATE.myCards = cards.slice(0, 5);
+      /* Heuristic for Hold'em: first 2 cards are hole, rest are community */
+      STATE.myCards = cards.slice(0, 2);
+      STATE.tableCards = cards.slice(2, 7);
       STATE.cardSource = 'scan';
       STATE.pickingRank = null;
-      if (STATE.myCards.length === 5) runEval();
-      addLog(`Scanned ${cards.length} card(s) from page`);
+      STATE.pickTarget = STATE.myCards.length >= 2 ? 'table' : 'hole';
+      if (STATE.myCards.length >= 2 && cards.length >= 5) runEval();
+      addLog(`Scanned ${cards.length} card(s): ${STATE.myCards.length} hole + ${STATE.tableCards.length} community`);
       renderPanel();
     } else {
       addLog(`Scan: ${cards.length} card(s) found \u2014 ${cards.length === 0 ? 'none detected, use manual input' : 'too many, ignored'}`);
@@ -597,21 +682,22 @@
     if (!body) return;
 
     let h = '';
+    const totalCards = STATE.myCards.length + STATE.tableCards.length;
 
-    /* ─ selected cards ─ */
+    /* ─ hole cards (your hand) ─ */
     h += `<div style="margin-bottom:6px;">`;
     h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">`;
     const srcLabel = STATE.cardSource === 'xhr' ? ' (auto)' : STATE.cardSource === 'scan' ? ' (scanned)' : '';
-    h += `<span style="font-weight:bold;font-size:11px;">Your Hand (${STATE.myCards.length}/5)${srcLabel}</span>`;
-    if (STATE.myCards.length > 0) {
-      h += `<span id="tpda-pk-clear" style="color:#f44;cursor:pointer;font-size:11px;">Clear</span>`;
+    h += `<span style="font-weight:bold;font-size:11px;">Your Cards (${STATE.myCards.length}/2)${srcLabel}</span>`;
+    if (totalCards > 0) {
+      h += `<span id="tpda-pk-clear" style="color:#f44;cursor:pointer;font-size:11px;">Clear All</span>`;
     }
     h += `</div>`;
 
     if (STATE.myCards.length > 0) {
       h += `<div style="display:flex;gap:3px;flex-wrap:wrap;">`;
       STATE.myCards.forEach((c, i) => {
-        h += `<span class="tpda-pk-card" data-idx="${i}" title="Tap to remove">${cardHtml(c)}</span>`;
+        h += `<span class="tpda-pk-card" data-source="hole" data-idx="${i}" title="Tap to remove">${cardHtml(c)}</span>`;
       });
       h += `</div>`;
     } else {
@@ -619,11 +705,36 @@
     }
     h += `</div>`;
 
+    /* ─ community cards (table) ─ */
+    h += `<div style="margin-bottom:6px;">`;
+    h += `<div style="margin-bottom:4px;">`;
+    h += `<span style="font-weight:bold;font-size:11px;">Community Cards (${STATE.tableCards.length}/5)</span>`;
+    h += `</div>`;
+
+    if (STATE.tableCards.length > 0) {
+      h += `<div style="display:flex;gap:3px;flex-wrap:wrap;">`;
+      STATE.tableCards.forEach((c, i) => {
+        h += `<span class="tpda-pk-card" data-source="table" data-idx="${i}" title="Tap to remove">${cardHtml(c)}</span>`;
+      });
+      h += `</div>`;
+    } else {
+      h += `<div style="color:#666;font-size:11px;">Waiting for flop...</div>`;
+    }
+    h += `</div>`;
+
     /* ─ card picker ─ */
-    if (STATE.myCards.length < 5) {
-      const usedKeys = new Set(STATE.myCards.map(cardKey));
+    if (STATE.myCards.length < 2 || STATE.tableCards.length < 5) {
+      const usedKeys = new Set([...STATE.myCards, ...STATE.tableCards].map(cardKey));
+      const isHole  = STATE.pickTarget === 'hole' && STATE.myCards.length < 2;
+      const isTable = !isHole;
 
       h += `<div style="margin-bottom:6px;padding:6px;border:1px solid #2f3340;border-radius:8px;background:#141821;">`;
+
+      /* Pick target toggle */
+      h += `<div style="display:flex;gap:4px;margin-bottom:4px;font-size:10px;">`;
+      h += `<span id="tpda-pk-target-hole" style="cursor:pointer;padding:2px 6px;border-radius:4px;${isHole ? 'background:#2e7d32;color:#fff;' : 'color:#888;'}">Hole${STATE.myCards.length >= 2 ? ' (full)' : ''}</span>`;
+      h += `<span id="tpda-pk-target-table" style="cursor:pointer;padding:2px 6px;border-radius:4px;${isTable ? 'background:#1565c0;color:#fff;' : 'color:#888;'}">Community${STATE.tableCards.length >= 5 ? ' (full)' : ''}</span>`;
+      h += `</div>`;
 
       h += `<div style="display:flex;flex-wrap:wrap;gap:1px;margin-bottom:4px;">`;
       for (const r of RANKS) {
@@ -660,17 +771,23 @@
 
       h += `<div style="margin-bottom:6px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#141821;">`;
       h += `<div style="font-weight:bold;font-size:14px;margin-bottom:2px;">${escapeHtml(STATE.handEval.name)}</div>`;
-      h += `<div class="tpda-pk-bar"><div class="tpda-pk-bar-fill" style="width:${eff}%;background:${sg.color};"></div></div>`;
-      h += `<div style="display:flex;justify-content:space-between;font-size:11px;color:#bbb;">`;
-      h += `<span>W\u2009${wp}%\u2009\u00b7\u2009T\u2009${tp}%\u2009\u00b7\u2009L\u2009${lp}%</span>`;
-      h += `<span style="font-weight:bold;">${eff}%</span>`;
-      h += `</div>`;
+      if (STATE.winProb) {
+        h += `<div class="tpda-pk-bar"><div class="tpda-pk-bar-fill" style="width:${eff}%;background:${sg.color};"></div></div>`;
+        h += `<div style="display:flex;justify-content:space-between;font-size:11px;color:#bbb;">`;
+        h += `<span>W\u2009${wp}%\u2009\u00b7\u2009T\u2009${tp}%\u2009\u00b7\u2009L\u2009${lp}%</span>`;
+        h += `<span style="font-weight:bold;">${eff}%</span>`;
+        h += `</div>`;
+      } else {
+        h += `<div style="font-size:11px;color:#ffc107;">Best hand so far (need 2 hole + 3+ community for full eval)</div>`;
+      }
       h += `</div>`;
 
-      h += `<div style="margin-bottom:6px;padding:8px;border:2px solid ${sg.color};border-radius:8px;background:rgba(0,0,0,0.3);text-align:center;">`;
-      h += `<div style="font-size:18px;font-weight:bold;color:${sg.color};">${escapeHtml(sg.act)}</div>`;
-      h += `<div style="font-size:11px;color:#bbb;">${escapeHtml(sg.desc)}</div>`;
-      h += `</div>`;
+      if (STATE.winProb) {
+        h += `<div style="margin-bottom:6px;padding:8px;border:2px solid ${sg.color};border-radius:8px;background:rgba(0,0,0,0.3);text-align:center;">`;
+        h += `<div style="font-size:18px;font-weight:bold;color:${sg.color};">${escapeHtml(sg.act)}</div>`;
+        h += `<div style="font-size:11px;color:#bbb;">${escapeHtml(sg.desc)}</div>`;
+        h += `</div>`;
+      }
 
       /* ─ opponent range (collapsible) ─ */
       if (STATE.oppRange) {
@@ -699,9 +816,14 @@
 
         h += `</div>`;
       }
-    } else if (STATE.myCards.length > 0 && STATE.myCards.length < 5) {
+    } else if (totalCards > 0 && (STATE.myCards.length < 2 || totalCards < 5)) {
       h += `<div style="padding:6px;color:#ffc107;font-size:11px;text-align:center;">`;
-      h += `Pick ${5 - STATE.myCards.length} more card${5 - STATE.myCards.length > 1 ? 's' : ''}</div>`;
+      if (STATE.myCards.length < 2) {
+        h += `Pick ${2 - STATE.myCards.length} more hole card${2 - STATE.myCards.length > 1 ? 's' : ''}`;
+      } else {
+        h += `Pick ${Math.max(0, 5 - totalCards)} more community card${5 - totalCards > 1 ? 's' : ''} for evaluation`;
+      }
+      h += `</div>`;
     }
 
     /* ─ api key card ─ */
@@ -717,7 +839,7 @@
     if (clearBtn) clearBtn.onclick = clearCards;
 
     body.querySelectorAll('.tpda-pk-card[data-idx]').forEach(el => {
-      el.onclick = () => removeCard(Number(el.dataset.idx));
+      el.onclick = () => removeCard(el.dataset.source, Number(el.dataset.idx));
     });
 
     body.querySelectorAll('.tpda-pk-rank-btn[data-rank]').forEach(el => {
@@ -735,6 +857,15 @@
         addCard(rank, suit);
       };
     });
+
+    const holeTarget = document.getElementById('tpda-pk-target-hole');
+    const tableTarget = document.getElementById('tpda-pk-target-table');
+    if (holeTarget) holeTarget.onclick = () => {
+      if (STATE.myCards.length < 2) { STATE.pickTarget = 'hole'; renderPanel(); }
+    };
+    if (tableTarget) tableTarget.onclick = () => {
+      STATE.pickTarget = 'table'; renderPanel();
+    };
 
     const rangeToggle = document.getElementById('tpda-pk-range-toggle');
     if (rangeToggle) {
