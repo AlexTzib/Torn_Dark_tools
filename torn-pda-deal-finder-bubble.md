@@ -87,7 +87,8 @@ Profit is calculated as: `net_sell_price - buy_price`, where `net_sell_price = g
 2. Add a new script
 3. Paste the contents of `torn-pda-deal-finder-bubble.user.js`
 4. Set the match pattern to `https://www.torn.com/*`
-5. Save and reload any Torn page
+5. **Set Injection Time to `Start`**
+6. Save and reload any Torn page
 
 ### Tampermonkey / Greasemonkey
 1. Install the Tampermonkey or Greasemonkey browser extension

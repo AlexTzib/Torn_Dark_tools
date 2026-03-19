@@ -6,6 +6,7 @@
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -1375,8 +1376,6 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     // Priority 3: network interception (hookFetch/hookXHR) fills it in later
 
     ensureStyles();
-    hookFetch();
-    hookXHR();
     createBubble();
     createPanel();
     await detectEnemyFaction();
@@ -1389,6 +1388,10 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
       renderPanel();
     }
   }
+
+  // Install network hooks immediately so we capture API calls made before init runs
+  hookFetch();
+  hookXHR();
 
   setTimeout(init, 1200);
 })();

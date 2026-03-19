@@ -155,8 +155,9 @@ All three scripts share a common bubble/panel architecture:
 2. Add a new script for each `.user.js` file you want to use
 3. Paste the script contents
 4. Set the match pattern to `https://www.torn.com/*`
-5. Save and reload any Torn page
-6. The bubble(s) will appear in the bottom-right corner
+5. **Set Injection Time to `Start`** — this is required so fetch/XHR hooks capture API traffic during page load
+6. Save and reload any Torn page
+7. The bubble(s) will appear in the bottom-right corner
 
 ### Tampermonkey / Greasemonkey (desktop browsers)
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) or Greasemonkey extension

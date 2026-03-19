@@ -82,6 +82,7 @@ PDA injects several handler scripts before userscripts run:
 - **PDA WebView is Flutter InAppWebView** — it supports standard Web APIs but has some quirks with `eval()` (blocked by CSP), popup windows, and download handling.
 - **The `flutterInAppWebViewPlatformReady` event** fires when the native bridge is ready. `PDA_httpGet` waits for this internally.
 - **Script injection timing:** PDA injects at `DOCUMENT_START`, before the page DOM is ready. Our scripts use `setTimeout(init, 1200)` to ensure the DOM is available.
+- **PDA injection time setting: MUST be set to `Start`** — In Torn PDA's userscript settings, each script has an "Injection Time" option (`Start` or `End`). **Always choose `Start`** for all scripts in this repo. This ensures fetch/XHR hooks install as early as possible to capture API traffic during page load. The `setTimeout(init, 1200)` inside each script already handles waiting for the DOM before creating the UI. Choosing `End` would cause missed API interceptions, especially for Deal Finder which relies entirely on intercepted traffic.
 - **PDA remote loading:** PDA can load scripts from URLs. The `urls` file in the repo root lists the raw GitHub URLs for each script. When adding/renaming a script, update this file.
 
 ### PDA Source Code Reference

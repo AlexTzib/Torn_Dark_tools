@@ -6,6 +6,7 @@
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -1497,8 +1498,6 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     addLog('AI Advisor initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
 
     ensureStyles();
-    hookFetch();
-    hookXHR();
     createBubble();
     createPanel();
     window.addEventListener('resize', onResize);
@@ -1512,6 +1511,10 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
 
     console.log('[Torn AI Assistant] Bubble mode started.');
   }
+
+  // Install network hooks immediately so we capture API calls made before init runs
+  hookFetch();
+  hookXHR();
 
   setTimeout(init, 1200);
 })();

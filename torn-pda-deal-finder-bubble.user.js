@@ -6,6 +6,7 @@
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -955,14 +956,16 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
 
   function init() {
     ensureStyles();
-    hookFetch();
-    hookXHR();
     createBubble();
     createPanel();
     window.addEventListener('resize', onResize);
     addLog('Deal Finder initialized');
     console.log('[Deal Finder Bubble] Started.');
   }
+
+  // Install network hooks immediately so we capture API calls made before init runs
+  hookFetch();
+  hookXHR();
 
   setTimeout(init, 1200);
 })();

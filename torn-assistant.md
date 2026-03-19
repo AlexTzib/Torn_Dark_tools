@@ -100,8 +100,9 @@ It displays a draggable chat-head bubble that expands into a panel showing playe
 2. Add a new script
 3. Paste the contents of `torn-assistant.user.js`
 4. Set the match pattern to `https://www.torn.com/*`
-5. Save and reload any Torn page
-6. The API key is loaded automatically — no configuration needed
+5. **Set Injection Time to `Start`**
+6. Save and reload any Torn page
+7. The API key is loaded automatically — no configuration needed
 
 ### Tampermonkey / Greasemonkey
 1. Install the Tampermonkey or Greasemonkey browser extension
