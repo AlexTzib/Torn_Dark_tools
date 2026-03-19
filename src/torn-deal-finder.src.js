@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.5.0
+// @version      2.5.1
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -16,6 +16,7 @@
   'use strict';
 
   /* ── constants ─────────────────────────────────────────────── */
+  const PDA_INJECTED_KEY = '###PDA-APIKEY###';
   const SCRIPT_KEY = 'tpda_plushie_prices_v1';
   const BUBBLE_ID = 'tpda-plushie-bubble';
   const PANEL_ID = 'tpda-plushie-panel';
@@ -240,34 +241,7 @@
   }
 
   /* ── draggable ─────────────────────────────────────────────── */
-  /* ── network hooks (capture API key from PDA traffic) ──────── */
-  function hookFetch() {
-    const originalFetch = window.fetch;
-    if (!originalFetch) return;
-    window.fetch = async function (...args) {
-      try {
-        const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
-        if (url.includes('api.torn.com/')) extractApiKeyFromUrl(url);
-      } catch {}
-      return originalFetch.apply(this, args);
-    };
-  }
-
-  function hookXHR() {
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this.__tpda_url = url;
-      try {
-        const u = String(url || '');
-        if (u.includes('api.torn.com/')) extractApiKeyFromUrl(u);
-      } catch {}
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      return origSend.apply(this, args);
-    };
-  }
+  /* ── network hooks are provided by common.js ────────────────── */
 
   /* ── cross-origin GET helper (PDA native → plain fetch) ───── */
   async function crossOriginGet(url) {
@@ -286,7 +260,6 @@
   }
 
   /* ── fetch plushie prices from Torn API ────────────────────── */
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   async function fetchMarketData(itemId) {
     if (!STATE.apiKey) throw new Error('No API key');
