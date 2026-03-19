@@ -1,0 +1,784 @@
+// ==UserScript==
+// @name         Torn PDA - Strip Poker Advisor
+// @namespace    alex.torn.pda.strippoker.bubble
+// @version      1.0.0
+// @description  Compact poker hand advisor for Torn Strip Poker. Tap-to-pick cards, evaluates hand strength via Monte Carlo simulation, and suggests optimal play. Tiny bubble won't block the pocket screen.
+// @author       Alex + Devin
+// @match        https://www.torn.com/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  /* ── constants ─────────────────────────────────────────────── */
+  const SCRIPT_KEY   = 'tpda_strip_poker_v1';
+  const BUBBLE_ID    = 'tpda-poker-bubble';
+  const PANEL_ID     = 'tpda-poker-panel';
+  const HEADER_ID    = 'tpda-poker-header';
+  const BUBBLE_SIZE  = 40;
+  const MC_ITERATIONS = 5000;
+
+  const RANKS   = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+  const SUITS   = ['c','d','h','s'];
+  const SUIT_SYM = { c: '\u2663', d: '\u2666', h: '\u2665', s: '\u2660' };
+  const SUIT_CLR = { c: '#4caf50', d: '#42a5f5', h: '#ef5350', s: '#e0e0e0' };
+  const RANK_VAL = {};
+  RANKS.forEach((r, i) => { RANK_VAL[r] = i + 2; });
+
+  const HAND_NAMES = [
+    'High Card', 'One Pair', 'Two Pair', 'Three of a Kind',
+    'Straight', 'Flush', 'Full House', 'Four of a Kind',
+    'Straight Flush', 'Royal Flush'
+  ];
+
+  /* ── state ─────────────────────────────────────────────────── */
+  const STATE = {
+    myCards: [],
+    pickingRank: null,
+    handEval: null,
+    winProb: null,
+    suggestion: null,
+    oppRange: null,
+    showRange: false,
+    ui: { minimized: true, zIndexBase: 999960 },
+    _logs: []
+  };
+
+  /* ── shared utilities ──────────────────────────────────────── */
+  function nowTs() { return Date.now(); }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function addLog(msg) {
+    const ts = new Date().toLocaleTimeString();
+    STATE._logs.push(`[${ts}] ${msg}`);
+    if (STATE._logs.length > 200) STATE._logs.shift();
+  }
+
+  function getStorage(key, fallback) {
+    try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; }
+    catch { return fallback; }
+  }
+
+  function setStorage(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }
+
+  /* ── position helpers ──────────────────────────────────────── */
+  function getDefaultBubblePosition() {
+    const n = document.querySelectorAll('[data-tpda-bubble="1"]').length;
+    return { right: 12, bottom: 12 + n * 52 };
+  }
+  function getBubblePosition()   { return getStorage(`${SCRIPT_KEY}_bubble_pos`, getDefaultBubblePosition()); }
+  function setBubblePosition(p)  { setStorage(`${SCRIPT_KEY}_bubble_pos`, p); }
+  function getPanelPosition()    { return getStorage(`${SCRIPT_KEY}_panel_pos`, null); }
+  function setPanelPosition(p)   { setStorage(`${SCRIPT_KEY}_panel_pos`, p); }
+  function getBubbleEl()         { return document.getElementById(BUBBLE_ID); }
+  function getPanelEl()          { return document.getElementById(PANEL_ID); }
+
+  function bringToFront(el) {
+    STATE.ui.zIndexBase += 1;
+    if (el) el.style.zIndex = String(STATE.ui.zIndexBase);
+  }
+
+  function clampToViewport(left, top, w, h) {
+    return {
+      left: Math.min(Math.max(4, left), Math.max(4, window.innerWidth  - w - 4)),
+      top:  Math.min(Math.max(4, top),  Math.max(4, window.innerHeight - h - 4))
+    };
+  }
+
+  function bubbleRightBottomToLeftTop(pos, sz) {
+    return { left: window.innerWidth - sz - pos.right, top: window.innerHeight - sz - pos.bottom };
+  }
+
+  function leftTopToBubbleRightBottom(left, top, sz) {
+    return { right: Math.max(0, window.innerWidth - sz - left), bottom: Math.max(0, window.innerHeight - sz - top) };
+  }
+
+  /* ── card helpers ──────────────────────────────────────────── */
+  function cardKey(c)  { return c.rank + c.suit; }
+  function cardHtml(c) {
+    return `<span style="color:${SUIT_CLR[c.suit]};font-weight:bold;">${escapeHtml(c.rank)}${SUIT_SYM[c.suit]}</span>`;
+  }
+
+  /* ── 5-card hand evaluator ─────────────────────────────────── */
+  function evaluate5(cards) {
+    if (cards.length !== 5) return null;
+
+    const vals  = cards.map(c => c.value).sort((a, b) => b - a);
+    const suits = cards.map(c => c.suit);
+
+    const isFlush = suits.every(s => s === suits[0]);
+
+    const uniq = [...new Set(vals)].sort((a, b) => b - a);
+    let isStraight = false, straightHigh = 0;
+
+    if (uniq.length === 5) {
+      if (uniq[0] - uniq[4] === 4) {
+        isStraight = true;
+        straightHigh = uniq[0];
+      }
+      if (!isStraight && uniq[0] === 14 && uniq[1] === 5 &&
+          uniq[2] === 4 && uniq[3] === 3 && uniq[4] === 2) {
+        isStraight = true;
+        straightHigh = 5;
+      }
+    }
+
+    const freq = {};
+    for (const v of vals) freq[v] = (freq[v] || 0) + 1;
+    const groups = Object.entries(freq)
+      .map(([v, cnt]) => ({ value: Number(v), count: cnt }))
+      .sort((a, b) => b.count - a.count || b.value - a.value);
+    const counts = groups.map(g => g.count);
+
+    let rank, name;
+
+    if (isStraight && isFlush) {
+      rank = straightHigh === 14 ? 9 : 8;
+      name = rank === 9 ? 'Royal Flush' : 'Straight Flush';
+    } else if (counts[0] === 4)                        { rank = 7; name = 'Four of a Kind'; }
+      else if (counts[0] === 3 && counts[1] === 2)     { rank = 6; name = 'Full House'; }
+      else if (isFlush)                                 { rank = 5; name = 'Flush'; }
+      else if (isStraight)                              { rank = 4; name = 'Straight'; }
+      else if (counts[0] === 3)                         { rank = 3; name = 'Three of a Kind'; }
+      else if (counts[0] === 2 && counts[1] === 2)      { rank = 2; name = 'Two Pair'; }
+      else if (counts[0] === 2)                         { rank = 1; name = 'One Pair'; }
+      else                                              { rank = 0; name = 'High Card'; }
+
+    let score;
+    if (isStraight) {
+      score = rank * 1e10 + straightHigh * Math.pow(15, 4);
+    } else {
+      score = rank * 1e10;
+      for (let i = 0; i < groups.length; i++) {
+        score += groups[i].value * Math.pow(15, 4 - i);
+      }
+    }
+
+    return { rank, name, score };
+  }
+
+  /* ── Monte Carlo win probability ───────────────────────────── */
+  function buildDeck(exclude) {
+    const ex = new Set(exclude.map(cardKey));
+    const deck = [];
+    for (const r of RANKS) {
+      for (const s of SUITS) {
+        if (!ex.has(r + s)) deck.push({ rank: r, suit: s, value: RANK_VAL[r] });
+      }
+    }
+    return deck;
+  }
+
+  function shuffleDraw(deck, n) {
+    const a = [...deck];
+    for (let i = 0; i < n && i < a.length; i++) {
+      const j = i + Math.floor(Math.random() * (a.length - i));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a.slice(0, n);
+  }
+
+  function calcWinProb(myCards) {
+    const myEval = evaluate5(myCards);
+    if (!myEval) return null;
+    const deck = buildDeck(myCards);
+    let wins = 0, ties = 0;
+    for (let i = 0; i < MC_ITERATIONS; i++) {
+      const opp = shuffleDraw(deck, 5);
+      const oppEval = evaluate5(opp);
+      if (!oppEval) continue;
+      if (myEval.score > oppEval.score) wins++;
+      else if (myEval.score === oppEval.score) ties++;
+    }
+    return {
+      win:  wins / MC_ITERATIONS,
+      tie:  ties / MC_ITERATIONS,
+      lose: 1 - (wins + ties) / MC_ITERATIONS
+    };
+  }
+
+  /* ── opponent range analysis ───────────────────────────────── */
+  function calcOppRange(myCards) {
+    const myEval = evaluate5(myCards);
+    if (!myEval) return null;
+    const deck = buildDeck(myCards);
+    const range = {};
+    for (const n of HAND_NAMES) range[n] = { total: 0, beats: 0 };
+    const samples = 3000;
+    for (let i = 0; i < samples; i++) {
+      const opp = shuffleDraw(deck, 5);
+      const ev = evaluate5(opp);
+      if (!ev) continue;
+      range[ev.name].total++;
+      if (ev.score > myEval.score) range[ev.name].beats++;
+    }
+    return range;
+  }
+
+  /* ── action suggestion ─────────────────────────────────────── */
+  function suggest(prob) {
+    if (!prob) return { act: '?', color: '#888', desc: 'Enter 5 cards to evaluate' };
+    const wp = prob.win + prob.tie * 0.5;
+    if (wp >= 0.72) return { act: 'RAISE',   color: '#4caf50', desc: 'Strong hand \u2014 raise confidently' };
+    if (wp >= 0.55) return { act: 'CALL',    color: '#8bc34a', desc: 'Good hand \u2014 play it' };
+    if (wp >= 0.42) return { act: 'CALL',    color: '#ffc107', desc: 'Marginal \u2014 call if bet is small' };
+    if (wp >= 0.30) return { act: 'CAUTION', color: '#ff9800', desc: 'Weak \u2014 consider folding' };
+    return                  { act: 'FOLD',    color: '#f44336', desc: 'Very weak \u2014 fold' };
+  }
+
+  /* ── run full evaluation ───────────────────────────────────── */
+  function runEval() {
+    if (STATE.myCards.length < 5) {
+      STATE.handEval = null;
+      STATE.winProb  = null;
+      STATE.suggestion = suggest(null);
+      STATE.oppRange = null;
+      return;
+    }
+    STATE.handEval   = evaluate5(STATE.myCards);
+    STATE.winProb    = calcWinProb(STATE.myCards);
+    STATE.suggestion = suggest(STATE.winProb);
+    STATE.oppRange   = calcOppRange(STATE.myCards);
+    addLog(`Hand: ${STATE.handEval?.name} | Win: ${Math.round(STATE.winProb.win * 100)}% | ${STATE.suggestion.act}`);
+  }
+
+  /* ── card add / remove / clear ─────────────────────────────── */
+  function addCard(rank, suit) {
+    if (STATE.myCards.length >= 5) return;
+    if (STATE.myCards.some(c => cardKey(c) === rank + suit)) return;
+    STATE.myCards.push({ rank, suit, value: RANK_VAL[rank] });
+    STATE.pickingRank = null;
+    if (STATE.myCards.length === 5) runEval();
+    renderPanel();
+  }
+
+  function removeCard(idx) {
+    STATE.myCards.splice(idx, 1);
+    STATE.handEval = null;
+    STATE.winProb  = null;
+    STATE.suggestion = suggest(null);
+    STATE.oppRange = null;
+    renderPanel();
+  }
+
+  function clearCards() {
+    STATE.myCards = [];
+    STATE.pickingRank = null;
+    STATE.handEval = null;
+    STATE.winProb  = null;
+    STATE.suggestion = suggest(null);
+    STATE.oppRange = null;
+    renderPanel();
+  }
+
+  /* ── DOM scanning (best-effort) ────────────────────────────── */
+  function scanDom() {
+    const cards = [];
+    const seen  = new Set();
+
+    function tryAdd(rank, suit) {
+      if (!rank || !suit) return;
+      rank = rank.toUpperCase();
+      suit = suit.toLowerCase();
+      if (!RANK_VAL[rank] || !SUITS.includes(suit)) return;
+      const k = rank + suit;
+      if (seen.has(k)) return;
+      seen.add(k);
+      cards.push({ rank, suit, value: RANK_VAL[rank] });
+    }
+
+    document.querySelectorAll('img').forEach(img => {
+      const src = (img.src || '') + ' ' + (img.alt || '');
+      if (src.includes('back') || src.includes('blank')) return;
+      const m = src.match(/([2-9]|10|[jJqQkKaA])[\s_-]?(?:of[\s_-]?)?([cCdDhHsS])/);
+      if (m) tryAdd(m[1], m[2]);
+      const m2 = src.match(/([cdhs])[\s_-]?([2-9]|10|[jqka])/i);
+      if (m2) tryAdd(m2[2], m2[1]);
+    });
+
+    document.querySelectorAll('[data-card],[data-rank]').forEach(el => {
+      if (el.dataset.card) {
+        const m = el.dataset.card.match(/^(10|[2-9]|[JQKA])([cdhs])$/i);
+        if (m) tryAdd(m[1], m[2]);
+      }
+      if (el.dataset.rank && el.dataset.suit) tryAdd(el.dataset.rank, el.dataset.suit);
+    });
+
+    const symMap = { '\u2663': 'c', '\u2666': 'd', '\u2665': 'h', '\u2660': 's' };
+    document.querySelectorAll('[class*="card" i]').forEach(el => {
+      if (el.children.length > 5) return;
+      const txt = (el.textContent || '').trim();
+      if (txt.length > 5) return;
+      const m = txt.match(/^(10|[2-9]|[JQKA])\s*([\u2663\u2666\u2665\u2660])$/i) ||
+                txt.match(/^([\u2663\u2666\u2665\u2660])\s*(10|[2-9]|[JQKA])$/i);
+      if (m) {
+        if (symMap[m[1]]) tryAdd(m[2], symMap[m[1]]);
+        else if (symMap[m[2]]) tryAdd(m[1], symMap[m[2]]);
+      }
+    });
+
+    if (cards.length > 0 && cards.length <= 5) {
+      STATE.myCards = cards.slice(0, 5);
+      STATE.pickingRank = null;
+      if (STATE.myCards.length === 5) runEval();
+      addLog(`Scanned ${cards.length} card(s) from page`);
+      renderPanel();
+    } else {
+      addLog(`Scan: ${cards.length} card(s) found \u2014 ${cards.length === 0 ? 'none detected, use manual input' : 'too many, ignored'}`);
+    }
+  }
+
+  /* ── styles ────────────────────────────────────────────────── */
+  function ensureStyles() {
+    if (document.getElementById(`${SCRIPT_KEY}_style`)) return;
+    const s = document.createElement('style');
+    s.id = `${SCRIPT_KEY}_style`;
+    s.textContent = `
+      #${BUBBLE_ID} {
+        position: fixed;
+        width: ${BUBBLE_SIZE}px; height: ${BUBBLE_SIZE}px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #1b5e20, #0a3d0a);
+        color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: bold; font-family: Arial, sans-serif; font-size: 18px;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+        border: 1px solid rgba(255,255,255,0.15);
+        user-select: none; -webkit-user-select: none; touch-action: none;
+        cursor: grab;
+      }
+      #${PANEL_ID} {
+        position: fixed;
+        width: 260px; max-width: 92vw; max-height: 82vh;
+        background: rgba(15,15,18,0.98);
+        color: #fff;
+        border: 1px solid #3a3a45;
+        border-radius: 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        font-family: Arial, sans-serif; font-size: 12px;
+        display: flex; flex-direction: column;
+        overflow: hidden;
+      }
+      #${HEADER_ID} { cursor: move; touch-action: none; }
+
+      .tpda-pk-rank-btn {
+        display: inline-block;
+        min-width: 18px; padding: 3px 4px; margin: 1px;
+        text-align: center;
+        background: #1a1b22; color: #ccc;
+        border: 1px solid #444; border-radius: 4px;
+        cursor: pointer; font-size: 11px; font-family: monospace;
+        user-select: none;
+      }
+      .tpda-pk-rank-btn:hover, .tpda-pk-rank-btn.active {
+        background: #2e7d32; color: #fff; border-color: #4caf50;
+      }
+      .tpda-pk-suit-btn {
+        display: inline-block;
+        width: 32px; padding: 5px 0; margin: 2px;
+        text-align: center;
+        border: 1px solid #444; border-radius: 4px;
+        cursor: pointer; font-size: 15px;
+        user-select: none; background: #1a1b22;
+      }
+      .tpda-pk-suit-btn:hover { border-color: #aaa; }
+      .tpda-pk-suit-btn.used { opacity: 0.25; cursor: default; }
+
+      .tpda-pk-card {
+        display: inline-block;
+        padding: 2px 6px; margin: 2px;
+        border-radius: 4px;
+        background: #1a1b22; border: 1px solid #444;
+        font-size: 13px; cursor: pointer;
+      }
+      .tpda-pk-card:hover { border-color: #f44; background: #2c1015; }
+
+      .tpda-pk-bar {
+        height: 6px; border-radius: 3px;
+        background: #333; overflow: hidden; margin: 4px 0;
+      }
+      .tpda-pk-bar-fill {
+        height: 100%; border-radius: 3px;
+        transition: width 0.3s;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  /* ── create bubble ─────────────────────────────────────────── */
+  function createBubble() {
+    if (getBubbleEl()) return;
+    const b = document.createElement('div');
+    b.id = BUBBLE_ID;
+    b.dataset.tpdaBubble = '1';
+    b.textContent = '\u2660';
+
+    const pos = getBubblePosition();
+    b.style.right  = `${pos.right}px`;
+    b.style.bottom = `${pos.bottom}px`;
+    b.style.zIndex = String(STATE.ui.zIndexBase);
+
+    b.addEventListener('click', (e) => {
+      if (b.dataset.dragged === '1') { b.dataset.dragged = '0'; return; }
+      e.preventDefault();
+      expandPanelNearBubble();
+    });
+
+    document.body.appendChild(b);
+    makeDraggableBubble(b);
+  }
+
+  /* ── create panel ──────────────────────────────────────────── */
+  function createPanel() {
+    if (getPanelEl()) return;
+    const p = document.createElement('div');
+    p.id = PANEL_ID;
+    p.style.display = 'none';
+    p.style.zIndex  = String(STATE.ui.zIndexBase);
+
+    p.innerHTML = `
+      <div id="${HEADER_ID}" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#1c1d24;border-bottom:1px solid #333;flex:0 0 auto;">
+        <div>
+          <div style="font-weight:bold;font-size:13px;">\u2660 Poker Advisor</div>
+          <div style="font-size:10px;color:#bbb;">Strip Poker hand evaluator</div>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button id="tpda-pk-scan" style="background:#1b5e20;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;">Scan</button>
+          <button id="tpda-pk-collapse" style="background:#444;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;">\u25CB</button>
+        </div>
+      </div>
+      <div id="tpda-pk-body" style="padding:8px;overflow-y:auto;flex:1 1 auto;"></div>
+    `;
+
+    document.body.appendChild(p);
+
+    document.getElementById('tpda-pk-scan').addEventListener('click', scanDom);
+    document.getElementById('tpda-pk-collapse').addEventListener('click', collapseToBubble);
+    makeDraggablePanel(p, document.getElementById(HEADER_ID));
+  }
+
+  /* ── expand / collapse ─────────────────────────────────────── */
+  function expandPanelNearBubble() {
+    STATE.ui.minimized = false;
+    const bubble = getBubbleEl(), panel = getPanelEl();
+    if (!bubble || !panel) return;
+
+    bringToFront(panel);
+    bubble.style.display = 'none';
+    panel.style.display  = 'flex';
+
+    const saved = getPanelPosition();
+    if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
+      const c = clampToViewport(saved.left, saved.top, panel.offsetWidth || 260, panel.offsetHeight || 400);
+      panel.style.left = `${c.left}px`;
+      panel.style.top  = `${c.top}px`;
+      panel.style.right = ''; panel.style.bottom = '';
+    } else {
+      const bRect = bubble.getBoundingClientRect();
+      let left = bRect.left - 220, top = bRect.top - 100;
+      if (left < 4) left = 4;
+      if (top  < 4) top  = 4;
+      const c = clampToViewport(left, top, panel.offsetWidth || 260, panel.offsetHeight || 400);
+      panel.style.left = `${c.left}px`;
+      panel.style.top  = `${c.top}px`;
+      panel.style.right = ''; panel.style.bottom = '';
+      setPanelPosition(c);
+    }
+
+    renderPanel();
+  }
+
+  function collapseToBubble() {
+    STATE.ui.minimized = true;
+    const bubble = getBubbleEl(), panel = getPanelEl();
+    if (!bubble || !panel) return;
+    panel.style.display  = 'none';
+    bubble.style.display = 'flex';
+    bringToFront(bubble);
+  }
+
+  /* ── draggable bubble ──────────────────────────────────────── */
+  function makeDraggableBubble(el) {
+    let sx = null, sy = null, ox = 0, oy = 0, dragging = false;
+
+    el.addEventListener('pointerdown', (e) => {
+      dragging = false;
+      el.dataset.dragged = '0';
+      el.setPointerCapture?.(e.pointerId);
+      bringToFront(el);
+      const pos = getBubblePosition();
+      const cur = bubbleRightBottomToLeftTop(pos, BUBBLE_SIZE);
+      sx = e.clientX; sy = e.clientY;
+      ox = cur.left;  oy = cur.top;
+    });
+
+    el.addEventListener('pointermove', (e) => {
+      if (sx === null) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragging = true;
+      if (!dragging) return;
+      const c = clampToViewport(ox + dx, oy + dy, BUBBLE_SIZE, BUBBLE_SIZE);
+      el.style.left = `${c.left}px`; el.style.top = `${c.top}px`;
+      el.style.right = ''; el.style.bottom = '';
+      el.dataset.dragged = '1';
+    });
+
+    function finish() {
+      if (sx === null) return;
+      if (dragging) {
+        const l = parseFloat(el.style.left || '0');
+        const t = parseFloat(el.style.top  || '0');
+        setBubblePosition(leftTopToBubbleRightBottom(l, t, BUBBLE_SIZE));
+      }
+      sx = null; sy = null;
+    }
+    el.addEventListener('pointerup', finish);
+    el.addEventListener('pointercancel', finish);
+  }
+
+  /* ── draggable panel ───────────────────────────────────────── */
+  function makeDraggablePanel(panel, handle) {
+    let sx = null, sy = null, ox = 0, oy = 0;
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button')) return;
+      handle.setPointerCapture?.(e.pointerId);
+      bringToFront(panel);
+      const r = panel.getBoundingClientRect();
+      sx = e.clientX; sy = e.clientY;
+      ox = r.left;    oy = r.top;
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (sx === null) return;
+      const r = panel.getBoundingClientRect();
+      const c = clampToViewport(ox + (e.clientX - sx), oy + (e.clientY - sy), r.width, r.height);
+      panel.style.left = `${c.left}px`; panel.style.top = `${c.top}px`;
+      panel.style.right = ''; panel.style.bottom = '';
+    });
+
+    function finish() {
+      if (sx === null) return;
+      const r = panel.getBoundingClientRect();
+      setPanelPosition({ left: r.left, top: r.top });
+      sx = null; sy = null;
+    }
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+  }
+
+  /* ── window resize ─────────────────────────────────────────── */
+  function onResize() {
+    const bubble = getBubbleEl();
+    if (bubble && bubble.style.display !== 'none') {
+      const pos = getBubblePosition();
+      const lt  = bubbleRightBottomToLeftTop(pos, BUBBLE_SIZE);
+      const c   = clampToViewport(lt.left, lt.top, BUBBLE_SIZE, BUBBLE_SIZE);
+      bubble.style.left = `${c.left}px`; bubble.style.top = `${c.top}px`;
+      bubble.style.right = ''; bubble.style.bottom = '';
+    }
+    const panel = getPanelEl();
+    if (panel && panel.style.display !== 'none') {
+      const r = panel.getBoundingClientRect();
+      const c = clampToViewport(r.left, r.top, r.width, r.height);
+      panel.style.left = `${c.left}px`; panel.style.top = `${c.top}px`;
+    }
+  }
+
+  /* ── render panel ──────────────────────────────────────────── */
+  function renderPanel() {
+    const body = document.getElementById('tpda-pk-body');
+    if (!body) return;
+
+    let h = '';
+
+    /* ─ selected cards ─ */
+    h += `<div style="margin-bottom:6px;">`;
+    h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">`;
+    h += `<span style="font-weight:bold;font-size:11px;">Your Hand (${STATE.myCards.length}/5)</span>`;
+    if (STATE.myCards.length > 0) {
+      h += `<span id="tpda-pk-clear" style="color:#f44;cursor:pointer;font-size:11px;">Clear</span>`;
+    }
+    h += `</div>`;
+
+    if (STATE.myCards.length > 0) {
+      h += `<div style="display:flex;gap:3px;flex-wrap:wrap;">`;
+      STATE.myCards.forEach((c, i) => {
+        h += `<span class="tpda-pk-card" data-idx="${i}" title="Tap to remove">${cardHtml(c)}</span>`;
+      });
+      h += `</div>`;
+    } else {
+      h += `<div style="color:#666;font-size:11px;">Tap a rank then a suit below, or use Scan</div>`;
+    }
+    h += `</div>`;
+
+    /* ─ card picker ─ */
+    if (STATE.myCards.length < 5) {
+      const usedKeys = new Set(STATE.myCards.map(cardKey));
+
+      h += `<div style="margin-bottom:6px;padding:6px;border:1px solid #2f3340;border-radius:8px;background:#141821;">`;
+
+      h += `<div style="display:flex;flex-wrap:wrap;gap:1px;margin-bottom:4px;">`;
+      for (const r of RANKS) {
+        const active = STATE.pickingRank === r ? ' active' : '';
+        h += `<span class="tpda-pk-rank-btn${active}" data-rank="${r}">${r}</span>`;
+      }
+      h += `</div>`;
+
+      if (STATE.pickingRank) {
+        h += `<div style="display:flex;gap:3px;justify-content:center;">`;
+        for (const s of SUITS) {
+          const key  = STATE.pickingRank + s;
+          const used = usedKeys.has(key);
+          const cls  = used ? ' used' : '';
+          h += `<span class="tpda-pk-suit-btn${cls}" style="color:${SUIT_CLR[s]};"`;
+          if (!used) h += ` data-pick="${key}"`;
+          h += `>${SUIT_SYM[s]}</span>`;
+        }
+        h += `</div>`;
+      } else {
+        h += `<div style="color:#666;font-size:10px;text-align:center;">Pick a rank first</div>`;
+      }
+
+      h += `</div>`;
+    }
+
+    /* ─ evaluation results ─ */
+    if (STATE.handEval) {
+      const wp  = STATE.winProb ? Math.round(STATE.winProb.win  * 100) : 0;
+      const tp  = STATE.winProb ? Math.round(STATE.winProb.tie  * 100) : 0;
+      const lp  = STATE.winProb ? Math.round(STATE.winProb.lose * 100) : 0;
+      const eff = STATE.winProb ? Math.round((STATE.winProb.win + STATE.winProb.tie * 0.5) * 100) : 0;
+      const sg  = STATE.suggestion || suggest(null);
+
+      h += `<div style="margin-bottom:6px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#141821;">`;
+      h += `<div style="font-weight:bold;font-size:14px;margin-bottom:2px;">${escapeHtml(STATE.handEval.name)}</div>`;
+      h += `<div class="tpda-pk-bar"><div class="tpda-pk-bar-fill" style="width:${eff}%;background:${sg.color};"></div></div>`;
+      h += `<div style="display:flex;justify-content:space-between;font-size:11px;color:#bbb;">`;
+      h += `<span>W\u2009${wp}%\u2009\u00b7\u2009T\u2009${tp}%\u2009\u00b7\u2009L\u2009${lp}%</span>`;
+      h += `<span style="font-weight:bold;">${eff}%</span>`;
+      h += `</div>`;
+      h += `</div>`;
+
+      h += `<div style="margin-bottom:6px;padding:8px;border:2px solid ${sg.color};border-radius:8px;background:rgba(0,0,0,0.3);text-align:center;">`;
+      h += `<div style="font-size:18px;font-weight:bold;color:${sg.color};">${escapeHtml(sg.act)}</div>`;
+      h += `<div style="font-size:11px;color:#bbb;">${escapeHtml(sg.desc)}</div>`;
+      h += `</div>`;
+
+      /* ─ opponent range (collapsible) ─ */
+      if (STATE.oppRange) {
+        h += `<div style="margin-bottom:6px;">`;
+        h += `<div id="tpda-pk-range-toggle" style="cursor:pointer;color:#42a5f5;font-size:11px;font-weight:bold;">`;
+        h += `${STATE.showRange ? '\u25BC' : '\u25B6'} What can beat you?</div>`;
+
+        if (STATE.showRange) {
+          h += `<div style="margin-top:4px;padding:6px;border:1px solid #2f3340;border-radius:6px;background:#0f1116;font-size:11px;">`;
+          for (let i = HAND_NAMES.length - 1; i >= 0; i--) {
+            const name = HAND_NAMES[i];
+            const r = STATE.oppRange[name];
+            if (!r || !r.total) continue;
+            const pct     = Math.round((r.total / 3000) * 100);
+            const beatPct = r.total > 0 ? Math.round((r.beats / r.total) * 100) : 0;
+            const beatAny = r.beats > 0;
+            const color   = beatAny ? '#ff9f9f' : '#8dff8d';
+            h += `<div style="display:flex;justify-content:space-between;padding:1px 0;">`;
+            h += `<span>${escapeHtml(name)}</span>`;
+            h += `<span style="color:${color};">${pct}%`;
+            if (beatAny) h += ` \u2014 ${beatPct}% beats`;
+            h += `</span></div>`;
+          }
+          h += `</div>`;
+        }
+
+        h += `</div>`;
+      }
+    } else if (STATE.myCards.length > 0 && STATE.myCards.length < 5) {
+      h += `<div style="padding:6px;color:#ffc107;font-size:11px;text-align:center;">`;
+      h += `Pick ${5 - STATE.myCards.length} more card${5 - STATE.myCards.length > 1 ? 's' : ''}</div>`;
+    }
+
+    /* ─ debug log ─ */
+    h += `<div style="margin-top:6px;padding:6px;border:1px solid #2f3340;border-radius:8px;background:#0f1116;">`;
+    h += `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="tpda-pk-log-toggle">`;
+    h += `<span style="font-weight:bold;font-size:11px;">Log (${STATE._logs.length})</span>`;
+    h += `<div style="display:flex;gap:4px;">`;
+    h += `<button id="tpda-pk-log-copy" style="font-size:10px;background:#444;color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;">Copy</button>`;
+    h += `<span style="font-size:10px;color:#bbb;">toggle</span>`;
+    h += `</div></div>`;
+    h += `<div id="tpda-pk-log-body" style="display:none;margin-top:4px;max-height:120px;overflow-y:auto;font-size:10px;color:#aaa;font-family:monospace;white-space:pre-wrap;word-break:break-all;">`;
+    h += STATE._logs.map(l => escapeHtml(l)).join('\n');
+    h += `</div></div>`;
+
+    body.innerHTML = h;
+
+    /* ── wire up event handlers ── */
+    const clearBtn = document.getElementById('tpda-pk-clear');
+    if (clearBtn) clearBtn.onclick = clearCards;
+
+    body.querySelectorAll('.tpda-pk-card[data-idx]').forEach(el => {
+      el.onclick = () => removeCard(Number(el.dataset.idx));
+    });
+
+    body.querySelectorAll('.tpda-pk-rank-btn[data-rank]').forEach(el => {
+      el.onclick = () => {
+        STATE.pickingRank = STATE.pickingRank === el.dataset.rank ? null : el.dataset.rank;
+        renderPanel();
+      };
+    });
+
+    body.querySelectorAll('.tpda-pk-suit-btn[data-pick]').forEach(el => {
+      el.onclick = () => {
+        const key  = el.dataset.pick;
+        const rank = key.slice(0, -1);
+        const suit = key.slice(-1);
+        addCard(rank, suit);
+      };
+    });
+
+    const rangeToggle = document.getElementById('tpda-pk-range-toggle');
+    if (rangeToggle) {
+      rangeToggle.onclick = () => { STATE.showRange = !STATE.showRange; renderPanel(); };
+    }
+
+    const logToggle = document.getElementById('tpda-pk-log-toggle');
+    if (logToggle) {
+      logToggle.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const lb = document.getElementById('tpda-pk-log-body');
+        if (lb) lb.style.display = lb.style.display === 'none' ? 'block' : 'none';
+      };
+    }
+
+    const logCopy = document.getElementById('tpda-pk-log-copy');
+    if (logCopy) {
+      logCopy.onclick = () => {
+        navigator.clipboard.writeText(STATE._logs.join('\n')).then(() => {
+          logCopy.textContent = 'OK!';
+          setTimeout(() => { logCopy.textContent = 'Copy'; }, 1000);
+        }).catch(() => {});
+      };
+    }
+  }
+
+  /* ── init ──────────────────────────────────────────────────── */
+  function init() {
+    ensureStyles();
+    createBubble();
+    createPanel();
+    window.addEventListener('resize', onResize);
+    addLog('Strip Poker Advisor initialized');
+    console.log('[Strip Poker Advisor] Started.');
+  }
+
+  setTimeout(init, 1200);
+})();

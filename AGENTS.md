@@ -37,8 +37,10 @@ Torn_Dark_tools/
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~740 lines)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
-├── torn-war-bubble.user.js                ← War Bubble (~1249 lines)
-└── torn-war-bubble.md                     ← War Bubble documentation
+├── torn-war-bubble.user.js                ← War Bubble (~1486 lines)
+├── torn-war-bubble.md                     ← War Bubble documentation
+├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~785 lines)
+└── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
 ```
 
 - **Remote:** `https://github.com/AlexTzib/Torn_Dark_tools.git`
@@ -256,11 +258,12 @@ Each script uses a unique z-index base so they can coexist:
 
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
+| Strip Poker Advisor | 999960 | `tpda-poker-bubble` | `tpda-poker-panel` |
 | War Bubble | 999970 | `tpda-war-online-bubble` | `tpda-war-online-panel` |
 | Plushie Prices | 999980 | `tpda-plushie-bubble` | `tpda-plushie-panel` |
 | AI Advisor | 999990 | `tpda-safe-ai-bubble` | `tpda-safe-ai-panel` |
 
-When adding a new script, pick a z-index base that doesn't collide (e.g., 999960).
+When adding a new script, pick a z-index base that doesn't collide (e.g., 999950).
 
 ### localStorage Keys
 
@@ -270,7 +273,8 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 |---|---|---|
 | AI Advisor | `tpda_safe_ai_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos` |
 | Plushie Prices | `tpda_plushie_prices_v1` | `_apikey`, `_bubble_pos`, `_panel_pos`, `_prices` |
-| War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval` |
+| War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval`, `_collapsed` |
+| Strip Poker | `tpda_strip_poker_v1` | `_bubble_pos`, `_panel_pos` |
 
 ### Debug Log Pattern
 
@@ -387,6 +391,39 @@ Every script has:
 - All are one-click = one browser action (compliant)
 
 **Configurable poll intervals:** `[30s, 1min, 2min, 5min, 10min]` — stored in localStorage, default 1min. Polling only runs when panel is open.
+
+### Strip Poker Advisor (`torn-strip-poker-bubble.user.js`)
+
+**Purpose:** Compact poker hand evaluator for Strip Poker. No API key needed — pure client-side math.
+
+**Design choices (pocket-friendly):**
+- **40 px bubble** (vs standard 56 px) — won't cover the poker table on mobile
+- **260 px panel** (vs standard 390–420 px) — leaves room for the game UI
+- **z-index base 999960** — lowest of all scripts, sits behind other bubbles
+- **No fetch/XHR hooks, no API calls** — zero network overhead
+
+**Key functions:**
+- `evaluate5(cards)` — Full 5-card hand evaluator: rank (0–9), name, numeric score for tie-breaking. Handles ace-low straights (A-2-3-4-5) with correct `straightHigh` scoring.
+- `calcWinProb(myCards)` — Monte Carlo simulation: builds remaining 47-card deck, Fisher-Yates partial-shuffles 5 000 opponent hands, counts wins/ties.
+- `calcOppRange(myCards)` — Same simulation (3 000 samples) bucketed by hand name, tracking which beat the player's hand.
+- `suggest(prob)` — Maps effective win % (win + tie×0.5) to RAISE (≥72%) / CALL (≥42%) / CAUTION (≥30%) / FOLD (<30%).
+- `scanDom()` — Best-effort card detection from page: images (src/alt patterns), data attributes (`[data-card]`, `[data-rank]`), text with suit symbols (♣♦♥♠).
+- `addCard(rank, suit)` / `removeCard(idx)` / `clearCards()` — Manage the 5-card hand state; auto-evaluates when 5 cards are entered.
+- `renderPanel()` — Card picker (two-step: rank row → suit row), hand display, strength bar, action recommendation, collapsible opponent range, debug log.
+
+**Card picker UX:**
+1. Tap a rank button (2–A) — highlights green
+2. Tap a suit button (♣♦♥♠) — card is added
+3. Already-used cards are greyed out
+4. Tap any selected card to remove it
+5. Evaluation runs automatically when 5th card is added
+
+**DOM scanning strategies:**
+| Strategy | Selector | Parses |
+|----------|----------|--------|
+| Images | `img` elements | Card rank+suit from `src` and `alt` text patterns |
+| Data attrs | `[data-card]`, `[data-rank]` | Structured card data |
+| Text symbols | `[class*="card"]` with short text | Unicode suit symbols (♣♦♥♠) |
 
 ---
 
@@ -544,10 +581,11 @@ The `mergeUserData()` function in the AI Advisor handles **both V1 and V2 format
 node -c torn-assistant.user.js
 node -c torn-pda-deal-finder-bubble.user.js
 node -c torn-war-bubble.user.js
+node -c torn-strip-poker-bubble.user.js
 
 # Python fallback (bracket balance)
 python3 -c "
-for f in ['torn-assistant.user.js', 'torn-pda-deal-finder-bubble.user.js', 'torn-war-bubble.user.js']:
+for f in ['torn-assistant.user.js', 'torn-pda-deal-finder-bubble.user.js', 'torn-war-bubble.user.js', 'torn-strip-poker-bubble.user.js']:
     with open(f) as fh:
         content = fh.read()
     opens = content.count('{') + content.count('(') + content.count('[')
@@ -613,6 +651,8 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 | `faction` | `basic` | AI Advisor, War Bubble | Faction members, war status |
 | `market` | `bazaar,itemmarket` | Plushie Prices | Bazaar and item market floor prices per item |
 | `torn` | (various, intercepted) | AI Advisor | Market data, item values |
+
+> **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
 
 ### Rate Limits
 

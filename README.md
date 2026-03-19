@@ -41,6 +41,18 @@ An enemy faction online tracker for faction wars. Enter (or auto-detect) the ene
 - **Attack buttons** per member — "Go Attack" link, "Copy URL", "Copy Name"
 - **Configurable polling** — 30s / 1min / 2min / 5min / 10min refresh rate
 
+### Strip Poker Advisor (Green "♠" bubble)
+
+A compact poker hand evaluator for Torn's Strip Poker mini-game. Designed to be tiny (40 px bubble, 260 px panel) so it won't block the pocket/PDA screen.
+
+- **Two-tap card picker** — tap a rank (2–A), then a suit (♣♦♥♠) to enter your hand
+- **5-card hand evaluation** — recognises all poker hands from High Card to Royal Flush
+- **Monte Carlo win probability** — simulates 5 000 random opponent hands to calculate Win / Tie / Lose %
+- **Action suggestion** — color-coded RAISE / CALL / CAUTION / FOLD based on effective win %
+- **Opponent range breakdown** — shows how often the opponent lands each hand type and what % of those beat yours
+- **DOM auto-scan** — attempts to read cards from the page automatically; falls back to manual input
+- **No API key needed** — pure client-side math, zero network calls
+
 ---
 
 ## Scripts
@@ -50,6 +62,7 @@ An enemy faction online tracker for faction wars. Enter (or auto-detect) the ene
 | [**AI Advisor**](torn-assistant.md) | Blue "AI" | Status dashboard, happy-jump advisor, stock-block ROI, war timing, drug-free energy plan | Direct API fetching + passive interception |
 | [**Plushie Prices**](torn-pda-deal-finder-bubble.md) | Purple teddy bear | Plushie bazaar vs item market price comparison | `market/{id}?selections=bazaar,itemmarket` (13 calls per refresh) |
 | [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis, attack links | `faction/{id}?selections=basic` (configurable 30s–10min) |
+| [**Strip Poker Advisor**](torn-strip-poker-bubble.md) | Green "♠" | Poker hand evaluator, win probability, action suggestion | None (client-side only) |
 
 ---
 
@@ -68,6 +81,7 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 - **Plushie Prices** makes **13** API calls per refresh (one per plushie), fetching bazaar and item market listings. Calls are spaced 250ms apart. Prices are cached for 10 minutes.
 - **AI Advisor** makes direct API calls for `user` and `faction` data using the user's own key, and also passively intercepts existing traffic for additional data.
 - **War Bubble** makes **one** read-only API call per polling cycle (configurable: 30s / 1min / 2min / 5min / 10min, only while the panel is open) using the minimum `selections=basic` endpoint.
+- **Strip Poker Advisor** makes **zero** API calls — it runs entirely on client-side poker math (Monte Carlo simulation).
 
 ### 3. Transparent API Key Handling
 
@@ -93,15 +107,15 @@ All scripts that need an API key use a three-tier priority system:
 
 ## Torn Policy Compliance Summary
 
-| Requirement | AI Advisor | Plushie Prices | War Bubble |
-|---|---|---|---|
-| No game-action automation | Compliant | Compliant | Compliant |
-| One-click-one-action | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only |
-| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` |
-| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) |
-| No request modification | Compliant | Compliant | Compliant |
-| Read-only display | Compliant | Compliant | Compliant |
+| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker |
+|---|---|---|---|---|
+| No game-action automation | Compliant | Compliant | Compliant | Compliant |
+| One-click-one-action | Compliant | Compliant | Compliant | Compliant |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed |
+| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all |
+| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) |
+| No request modification | Compliant | Compliant | Compliant | Compliant |
+| Read-only display | Compliant | Compliant | Compliant | Compliant |
 
 For a detailed compliance breakdown, see each script's individual documentation in the `docs/` folder.
 
@@ -109,7 +123,7 @@ For a detailed compliance breakdown, see each script's individual documentation 
 
 ## Shared Architecture
 
-All three scripts share a common bubble/panel architecture:
+All four scripts share a common bubble/panel architecture:
 
 ```
 ┌─────────────┐     click      ┌──────────────────┐
@@ -167,7 +181,7 @@ All three scripts share a common bubble/panel architecture:
 4. Navigate to `torn.com` — the bubble(s) will appear
 
 ### Multiple Scripts
-All three scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
+All four scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
 
 ---
 
@@ -186,7 +200,9 @@ Torn_Dark_tools/
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble script
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
 ├── torn-war-bubble.user.js                ← War Online bubble script
-└── torn-war-bubble.md                     ← War Bubble documentation
+├── torn-war-bubble.md                     ← War Bubble documentation
+├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor bubble script
+└── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
 ```
 
 ---
