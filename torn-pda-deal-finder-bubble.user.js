@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.3.0
+// @version      2.4.0
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -494,6 +494,22 @@
     };
   }
 
+  /* ── cross-origin GET helper (PDA native → plain fetch) ───── */
+  async function crossOriginGet(url) {
+    /* PDA native HTTP — bypasses WebView restrictions entirely */
+    if (typeof PDA_httpGet === 'function') {
+      addLog('[W3B] using PDA_httpGet');
+      const r = await PDA_httpGet(url, {});
+      if (r && r.responseText) return JSON.parse(r.responseText);
+      throw new Error(`PDA_httpGet status ${r?.status || 'unknown'}`);
+    }
+    /* Plain fetch — works in Tampermonkey (weav3r.dev sends CORS: *) */
+    addLog('[W3B] using fetch');
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
   /* ── fetch plushie prices from Torn API ────────────────────── */
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -520,12 +536,7 @@
     const url = `https://weav3r.dev/api/marketplace/${itemId}`;
     addLog(`[W3B] GET /api/marketplace/${itemId}`);
     try {
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        addLog(`[W3B] bazaar ${itemId}: HTTP ${resp.status}`);
-        return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0 };
-      }
-      const data = await resp.json();
+      const data = await crossOriginGet(url);
       const listings = data.listings || [];
       const bazaarFloor = listings.length ? listings[0].price : null;
       const bazaarAvg = data.bazaar_average ?? null;

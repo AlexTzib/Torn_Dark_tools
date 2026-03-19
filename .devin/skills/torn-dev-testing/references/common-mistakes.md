@@ -101,3 +101,23 @@ if (PDA_INJECTED_KEY.length >= 16 && !PDA_INJECTED_KEY.includes('#')) {
 1. The script's companion `.md` file (e.g., `torn-war-bubble.md`)
 2. The Per-Script Reference section in `AGENTS.md`
 3. The file tree line count in `AGENTS.md`
+
+---
+
+## [CRITICAL] Using Plain fetch() for External APIs in PDA
+
+**What happens:** `fetch('https://weav3r.dev/...')` fails with "Failed to fetch" inside Torn PDA's WebView, even though the server sends `Access-Control-Allow-Origin: *`.
+**Why it keeps happening:** CORS headers suggest it should work, and it DOES work in Tampermonkey. But PDA's InAppWebView blocks external requests regardless.
+**Real example (v2.4.0 fix):** Bazaar prices from TornW3B were always empty in PDA.
+**The rule:** For any HTTP request to a domain OTHER than `api.torn.com`, use this pattern:
+```javascript
+if (typeof PDA_httpGet === 'function') {
+    const r = await PDA_httpGet(url, {});
+    return JSON.parse(r.responseText);
+}
+// Fallback to plain fetch (works in Tampermonkey)
+const resp = await fetch(url);
+```
+`PDA_httpGet` uses Flutter's native HTTP client, completely bypassing the WebView.
+**Note:** `PDA_httpGet` has a 2-second dedup per URL. Different URLs are fine.
+**Note:** `api.torn.com` requests work with plain `fetch()` in PDA because the WebView is on `torn.com` (same-origin).

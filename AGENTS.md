@@ -35,7 +35,7 @@ Torn_Dark_tools/
 │   └── community-repos.md                 ← Community Torn script repos analysis & learnings
 ├── torn-assistant.user.js                 ← AI Advisor bubble (~1517 lines)
 ├── torn-assistant.md                      ← AI Advisor documentation
-├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~740 lines)
+├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~794 lines)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
 ├── torn-war-bubble.user.js                ← War Bubble (~1525 lines)
 ├── torn-war-bubble.md                     ← War Bubble documentation
@@ -348,12 +348,16 @@ Every script has:
 - `CACHE_TTL_MS` — 10 minutes
 
 **Key functions:**
+- `crossOriginGet(url)` — Cross-origin GET helper: tries `PDA_httpGet` first (native Flutter HTTP, bypasses WebView restrictions), falls back to plain `fetch()` (works in Tampermonkey since weav3r.dev sends `Access-Control-Allow-Origin: *`). Returns parsed JSON.
 - `fetchMarketData(itemId)` — Fetches `api.torn.com/v2/market/{id}/itemmarket`; returns `{ floor, avg, count }`
-- `fetchBazaarData(itemId)` — Fetches `weav3r.dev/api/marketplace/{id}` (TornW3B); returns `{ bazaarFloor, bazaarAvg, bazaarCount }`. No API key needed.
+- `fetchBazaarData(itemId)` — Fetches `weav3r.dev/api/marketplace/{id}` via `crossOriginGet()`; returns `{ bazaarFloor, bazaarAvg, bazaarCount }`. No API key needed.
 - `fetchAllPrices(force)` — For each plushie: calls both `fetchMarketData` and `fetchBazaarData` in parallel (`Promise.all`), then sleeps 250ms before the next plushie. Computes `best = min(market floor, bazaar floor)`.
 - `getSortedPlushies()` — Returns plushie rows sorted by the current sort column/direction (name, floor, bazaar, best)
 - `renderPanel()` — Renders API key input (if needed), status bar, sortable price table (Market/Bazaar/Best columns), and debug log
 - `handleApiPayload(url, data)` — Extracts API key from passively intercepted traffic
+
+**v2.4.0 changes:**
+- **Fixed bazaar fetch in PDA:** `fetchBazaarData()` now uses `crossOriginGet()` which routes through `PDA_httpGet` in Torn PDA. PDA's WebView blocks plain `fetch()` to external domains even when CORS headers are present. `PDA_httpGet` uses Flutter's native HTTP client, bypassing WebView restrictions entirely.
 
 **Data flow:**
 1. API key resolved (saved → network-intercepted → manual entry)
