@@ -499,14 +499,15 @@
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.error}`);
-    /* v2 returns { bazaar: { listings: [{price, quantity}, ...] }, itemmarket: { listings: [{price, quantity}, ...] } } */
+    /* v2 returns { bazaar: { listings: [{price, amount}, ...] }, itemmarket: { listings: [{price, amount}, ...] } }
+       v1 used flat arrays with {cost, quantity} — normalize both to {cost, quantity} for downstream compat */
     const bazaarRaw = data.bazaar;
     const marketRaw = data.itemmarket;
     const bazaarArr = Array.isArray(bazaarRaw) ? bazaarRaw : (bazaarRaw?.listings || []);
     const marketArr = Array.isArray(marketRaw) ? marketRaw : (marketRaw?.listings || []);
     return {
-      bazaar:     bazaarArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.quantity })),
-      itemmarket: marketArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.quantity }))
+      bazaar:     bazaarArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.amount ?? e.quantity })),
+      itemmarket: marketArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.amount ?? e.quantity }))
     };
   }
 
