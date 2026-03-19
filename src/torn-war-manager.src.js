@@ -413,7 +413,7 @@
 
       #${PANEL_ID} {
         position: fixed;
-        width: 440px; max-height: 85vh;
+        width: 440px; max-width: 95vw; max-height: 85vh;
         background: #181a20; color: #e0e0e0;
         border: 1px solid #2f3340; border-radius: 14px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.45);
