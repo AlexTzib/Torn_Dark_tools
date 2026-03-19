@@ -416,9 +416,15 @@ Every script has:
 
 ### Strip Poker Advisor (`torn-strip-poker-bubble.user.js`)
 
-**Purpose:** Compact poker hand evaluator for Strip Poker. No API key needed — pure client-side math.
+**Purpose:** Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play. Multi-opponent aware.
 
-**v1.1.0 changes:** Added automatic card detection via XHR/fetch interception + MutationObserver-driven DOM auto-scan. Cards are now detected automatically when the poker game sends data.
+**v2.0.0:** Full rewrite from 5-card draw to Texas Hold'em. State tracks `myCards[]` (hole, 0-2) and `tableCards[]` (community, 0-5). `bestOfN()` evaluates all C(n,5) combinations. `calcWinProb()` and `calcOppRange()` simulate remaining community cards + opponent hole cards via Monte Carlo.
+
+**v2.0.1:** Broadened XHR interception — `isTornPageUrl()` matches ALL `torn.com` non-API requests. Every JSON response goes through `handlePokerPayload()`.
+
+**v2.1.0:** Critical DOM detection fix — `parseCardClass()` uses unanchored regex (Torn CSS modules have hash suffixes like `hearts-2___xYz1a`). Rewrote `scanDom()` with 4 strategies targeting Torn holdem DOM selectors. Added 1-second polling loop + change detection.
+
+**v2.2.0:** Multi-opponent awareness — `detectActivePlayers()` counts opponents via DOM selectors, `calcWinProb()` and `calcOppRange()` simulate `N-1` opponents (must beat ALL to win). UI shows opponent count with +/- adjustment buttons.
 
 **Design choices (pocket-friendly):**
 - **40 px bubble** (vs standard 56 px) — won't cover the poker table on mobile
@@ -427,36 +433,57 @@ Every script has:
 - **No API calls** — zero external network overhead (XHR/fetch hooks only intercept Torn's own game data)
 
 **Key functions:**
-- `parseClassCode(classCode)` — Parses Torn's casino card format (`"hearts-2"`, `"spades-K"`) into `{rank, suit, value}`.
+- `parseCardClass(className)` — Parses Torn's CSS-module card classes (`"hearts-2___xYz1a"`, `"spades-K___abc12"`) into `{rank, suit, value}` using unanchored regex.
 - `handlePokerPayload(data)` — Processes intercepted JSON game responses, extracting cards from various known data structures (`player.hand`, `yourCards`, `currentGame[]`, etc.) with recursive fallback scan.
-- `hookFetch()` / `hookXHR()` — Monkey-patches `fetch` and `XMLHttpRequest` to intercept poker-related URLs (`sid=*poker*`, `stripPoker`, `action=*poker*`). Installed immediately on script load (before DOM ready).
-- `startCardObserver()` — Sets up a `MutationObserver` on `#mainContainer` (or `body`) that debounce-triggers `scanDom()` every 500ms when the panel is open.
-- `evaluate5(cards)` — Full 5-card hand evaluator: rank (0–9), name, numeric score for tie-breaking. Handles ace-low straights (A-2-3-4-5) with correct `straightHigh` scoring.
-- `calcWinProb(myCards)` — Monte Carlo simulation: builds remaining 47-card deck, Fisher-Yates partial-shuffles 5 000 opponent hands, counts wins/ties.
-- `calcOppRange(myCards)` — Same simulation (3 000 samples) bucketed by hand name, tracking which beat the player's hand.
+- `hookFetch()` / `hookXHR()` — Monkey-patches `fetch` and `XMLHttpRequest` to intercept all Torn page requests. Installed immediately on script load (before DOM ready).
+- `scanDom()` — 4-strategy card detection:
+  1. Torn holdem DOM: `[class*="playerMeGateway"] [class*="hand"] [class*="card"] [class*="front"] > div` (hole) and `[class*="communityCards"] [class*="front"] > div` (community)
+  2. Generic suit-class scan (fallback)
+  3. data-card/data-rank attributes
+  4. img src/alt patterns
+- `detectActivePlayers()` — Counts active opponents via `[class*="opponent"]` elements, checks for folded/sitting out text, counts self if cards present. Returns total players (2-9).
+- `startCardPolling()` — 1-second `setInterval` that calls `scanDom()` when on holdem page.
+- `bestOfN(cards)` — Evaluates all C(n,5) combinations from up to 7 cards, returns best hand `{name, rank, score}`.
+- `evaluate5(cards)` — Full 5-card hand evaluator: rank (0–9), name, numeric score for tie-breaking. Handles ace-low straights (A-2-3-4-5).
+- `calcWinProb(holeCards, communityCards, numPlayers)` — Monte Carlo simulation (5000 iterations): draws remaining community cards + N-1 opponent hole pairs, counts wins only when you beat ALL opponents.
+- `calcOppRange(holeCards, communityCards, numPlayers)` — Monte Carlo (3000 samples): counts each opponent's hand types and how often they beat you.
 - `suggest(prob)` — Maps effective win % (win + tie×0.5) to RAISE (≥72%) / CALL (≥42%) / CAUTION (≥30%) / FOLD (<30%).
-- `scanDom()` — Best-effort card detection from page: images (src/alt patterns), data attributes, text suit symbols, and Torn's CSS-class card format (`hearts-2` etc.). Respects XHR-detected cards (won't overwrite with fewer DOM-scanned cards).
-- `addCard(rank, suit)` / `removeCard(idx)` / `clearCards()` — Manage the 5-card hand state; auto-evaluates when 5 cards are entered.
-- `renderPanel()` — Card picker (two-step: rank row → suit row), hand display with source indicator (auto/scanned/manual), strength bar, action recommendation, collapsible opponent range, debug log.
+- `addCard(rank, suit)` / `removeCard(source, idx)` / `clearCards()` — Manage hole + community card state; auto-evaluates when 2 hole + 3+ community.
+- `renderPanel()` — Card picker (two-step: rank row → suit row), hand display with source indicator, strength bar, action recommendation, opponent count with +/- buttons, collapsible opponent range, debug log.
+
+**Torn Hold'em DOM selectors (CSS modules with hash suffixes):**
+| Element | Selector Pattern |
+|---------|-----------------|
+| Player's hand area | `[class*="playerMeGateway"]` |
+| Hand container | `[class*="hand"]` |
+| Card element | `[class*="card"]` |
+| Card front face | `[class*="front"]` |
+| Community cards | `[class*="communityCards"]` |
+| Opponent elements | `[class*="opponent"]` |
+| Card suit-rank class | `hearts-2___xYz1a`, `spades-K___abc12` (unanchored regex: `/([cdhs]|clubs?|diamonds?|hearts?|spades?)[^a-z]*([2-9]|10|[JQKA])/i`) |
+
+**Page URL:** `https://www.torn.com/page.php?sid=holdem*`
 
 **Card detection priority:**
 1. **XHR/fetch interception** — Highest priority, captures game data JSON directly
-2. **DOM CSS-class scan** — Torn's `hearts-2`, `spades-K` style class names
-3. **Legacy DOM scan** — `<img>` src/alt, `[data-card]` attributes, unicode suit symbols
+2. **Torn holdem DOM scan** — CSS-module selectors for `playerMeGateway`, `communityCards`
+3. **Generic CSS class scan** — Suit-rank patterns in any element's class list
+4. **Legacy DOM scan** — `<img>` src/alt, `[data-card]` attributes
 
 **Card picker UX:**
 1. Tap a rank button (2–A) — highlights green
-2. Tap a suit button (♣♦♥♠) — card is added
+2. Tap a suit button (♣♦♥♠) — card is added to hole or community
 3. Already-used cards are greyed out
 4. Tap any selected card to remove it
-5. Evaluation runs automatically when 5th card is added
+5. Toggle between Hole/Community target
+6. Evaluation runs automatically when 2 hole + 3+ community cards present
 
-**DOM scanning strategies (legacy):**
-| Strategy | Selector | Parses |
-|----------|----------|--------|
-| Images | `img` elements | Card rank+suit from `src` and `alt` text patterns |
-| Data attrs | `[data-card]`, `[data-rank]` | Structured card data |
-| Text symbols | `[class*="card"]` with short text | Unicode suit symbols (♣♦♥♠) |
+**Multi-opponent simulation:**
+- `activePlayers` tracked in STATE (default 2, range 2-9)
+- DOM detection counts `[class*="opponent"]` elements not folded/sitting out
+- Win probability requires beating ALL opponents (not just one)
+- Tie = all opponents tied with you (rare with multiple opponents)
+- User can manually adjust opponent count with +/- buttons in the panel
 
 ---
 
@@ -790,6 +817,9 @@ Key patterns learned from analyzing popular Torn community scripts (TornTools ex
 | Page loading | `.react-loading-skeleton` |
 | Chat root | `#chatRoot` |
 | Content wrapper | `.content-wrapper[role="main"]` |
+| Holdem: player hand | `[class*="playerMeGateway"] [class*="hand"] [class*="card"] [class*="front"] > div` |
+| Holdem: community | `[class*="communityCards"] [class*="front"] > div` |
+| Holdem: opponents | `[class*="opponent"]` |
 
 > **Note:** Torn uses CSS modules with hash suffixes (e.g., `itemList___abc123`). Use `[class*='itemList___']` partial match selectors instead of exact class names.
 

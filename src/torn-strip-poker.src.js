@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Strip Poker Advisor
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      2.1.0
+// @version      2.2.0
 // @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -43,6 +43,7 @@
   const STATE = {
     myCards: [],       /* hole cards (0-2) */
     tableCards: [],    /* community cards (0-5) */
+    activePlayers: 2,  /* number of active players at the table (min 2 = you + 1 opponent) */
     cardSource: null, /* 'xhr', 'scan', 'manual' — tracks how cards were set */
     pickingRank: null,
     pickTarget: 'hole', /* 'hole' or 'table' — which set the picker adds to */
@@ -348,25 +349,39 @@
     return a.slice(0, n);
   }
 
-  function calcWinProb(holeCards, communityCards) {
+  function calcWinProb(holeCards, communityCards, numPlayers) {
+    const numOpponents = Math.max(1, (numPlayers || 2) - 1);
     const allKnown = [...holeCards, ...communityCards];
     const deck = buildDeck(allKnown);
     const communityNeeded = 5 - communityCards.length;
+    const cardsNeeded = communityNeeded + numOpponents * 2;
+
+    /* Ensure we have enough cards in the deck */
+    if (deck.length < cardsNeeded) return { win: 0, tie: 0, lose: 1 };
+
     let wins = 0, ties = 0;
     for (let i = 0; i < MC_ITERATIONS; i++) {
-      /* Draw remaining community cards + 2 opponent hole cards */
-      const drawn = shuffleDraw(deck, communityNeeded + 2);
+      const drawn = shuffleDraw(deck, cardsNeeded);
       const fullCommunity = [...communityCards, ...drawn.slice(0, communityNeeded)];
-      const oppHole = drawn.slice(communityNeeded, communityNeeded + 2);
 
-      const myAll  = [...holeCards, ...fullCommunity];
-      const oppAll = [...oppHole,  ...fullCommunity];
+      const myAll = [...holeCards, ...fullCommunity];
+      const myEval = bestOfN(myAll);
+      if (!myEval) continue;
 
-      const myEval  = bestOfN(myAll);
-      const oppEval = bestOfN(oppAll);
-      if (!myEval || !oppEval) continue;
-      if (myEval.score > oppEval.score) wins++;
-      else if (myEval.score === oppEval.score) ties++;
+      /* Evaluate ALL opponents — you must beat every one to win */
+      let beatAll = true;
+      let tiedBest = true;
+      for (let o = 0; o < numOpponents; o++) {
+        const oppStart = communityNeeded + o * 2;
+        const oppHole = drawn.slice(oppStart, oppStart + 2);
+        const oppAll = [...oppHole, ...fullCommunity];
+        const oppEval = bestOfN(oppAll);
+        if (!oppEval) continue;
+        if (oppEval.score > myEval.score) { beatAll = false; tiedBest = false; break; }
+        if (oppEval.score < myEval.score) tiedBest = false;
+      }
+      if (beatAll && !tiedBest) wins++;
+      else if (beatAll && tiedBest) ties++;
     }
     return {
       win:  wins / MC_ITERATIONS,
@@ -375,27 +390,36 @@
     };
   }
 
-  /* ── opponent range analysis (Hold'em) ─────────────────────── */
-  function calcOppRange(holeCards, communityCards) {
+  /* ── opponent range analysis (Hold'em, multi-opponent) ─────── */
+  function calcOppRange(holeCards, communityCards, numPlayers) {
+    const numOpponents = Math.max(1, (numPlayers || 2) - 1);
     const allKnown = [...holeCards, ...communityCards];
     const deck = buildDeck(allKnown);
     const communityNeeded = 5 - communityCards.length;
+    const cardsNeeded = communityNeeded + numOpponents * 2;
     const range = {};
     for (const n of HAND_NAMES) range[n] = { total: 0, beats: 0 };
     const samples = 3000;
+
+    if (deck.length < cardsNeeded) return range;
+
     for (let i = 0; i < samples; i++) {
-      const drawn = shuffleDraw(deck, communityNeeded + 2);
+      const drawn = shuffleDraw(deck, cardsNeeded);
       const fullCommunity = [...communityCards, ...drawn.slice(0, communityNeeded)];
-      const oppHole = drawn.slice(communityNeeded, communityNeeded + 2);
+      const myAll = [...holeCards, ...fullCommunity];
+      const myEv = bestOfN(myAll);
+      if (!myEv) continue;
 
-      const myAll  = [...holeCards, ...fullCommunity];
-      const oppAll = [...oppHole,  ...fullCommunity];
-
-      const myEv  = bestOfN(myAll);
-      const oppEv = bestOfN(oppAll);
-      if (!myEv || !oppEv) continue;
-      range[oppEv.name].total++;
-      if (oppEv.score > myEv.score) range[oppEv.name].beats++;
+      /* Check each opponent's hand */
+      for (let o = 0; o < numOpponents; o++) {
+        const oppStart = communityNeeded + o * 2;
+        const oppHole = drawn.slice(oppStart, oppStart + 2);
+        const oppAll = [...oppHole, ...fullCommunity];
+        const oppEv = bestOfN(oppAll);
+        if (!oppEv) continue;
+        range[oppEv.name].total++;
+        if (oppEv.score > myEv.score) range[oppEv.name].beats++;
+      }
     }
     return range;
   }
@@ -423,10 +447,10 @@
       return;
     }
     STATE.handEval   = bestOfN(allCards);
-    STATE.winProb    = calcWinProb(STATE.myCards, STATE.tableCards);
+    STATE.winProb    = calcWinProb(STATE.myCards, STATE.tableCards, STATE.activePlayers);
     STATE.suggestion = suggest(STATE.winProb);
-    STATE.oppRange   = calcOppRange(STATE.myCards, STATE.tableCards);
-    addLog(`Hand: ${STATE.handEval?.name} | Win: ${Math.round(STATE.winProb.win * 100)}% | ${STATE.suggestion.act}`);
+    STATE.oppRange   = calcOppRange(STATE.myCards, STATE.tableCards, STATE.activePlayers);
+    addLog(`Hand: ${STATE.handEval?.name} | Win: ${Math.round(STATE.winProb.win * 100)}% | Opp: ${STATE.activePlayers - 1} | ${STATE.suggestion.act}`);
   }
 
   /* ── card add / remove / clear (Hold'em) ────────────────────── */
@@ -498,6 +522,47 @@
       }
     });
     return cards;
+  }
+
+  /* ── Active player count detection ─────────────────────────── */
+  /* Torn holdem uses CSS-module classes like opponent___XXXX for other
+     players and playerMeGateway___XXXX for the local player.
+     Players who folded or are sitting out have text containing those keywords. */
+  function detectActivePlayers() {
+    let count = 0;
+
+    /* Count opponents who haven't folded / sat out */
+    const opponents = qsa('[class*="opponent"]');
+    if (opponents.length > 0) {
+      opponents.forEach(el => {
+        const txt = (el.textContent || '').toLowerCase();
+        const inactive = txt.includes('folded') || txt.includes('fold') ||
+                         txt.includes('sitting out') || txt.includes('waiting');
+        if (!inactive) count++;
+      });
+    } else {
+      /* Fallback: count elements with name-like classes */
+      const names = qsa('[class*="name___"]');
+      names.forEach(el => {
+        const parent = el.closest('div') || el;
+        const txt = (parent.textContent || '').toLowerCase();
+        const inactive = txt.includes('folded') || txt.includes('fold') ||
+                         txt.includes('sitting out') || txt.includes('waiting');
+        if (!inactive) count++;
+      });
+    }
+
+    /* Check if WE are active (have cards and haven't folded) */
+    const myZone = document.querySelector('[class*="playerMeGateway"]');
+    if (myZone) {
+      const myCards = qsa('[class*="playerMeGateway"] [class*="hand"] [class*="card"]');
+      const myText = (myZone.textContent || '').toLowerCase();
+      const iFolded = myText.includes('folded') || myText.includes('fold');
+      if (myCards.length >= 2 && !iFolded) count++;
+    }
+
+    /* Clamp: at least 2 (you + 1 opponent), at most 10 */
+    return Math.max(2, Math.min(count, 10));
   }
 
   function scanDom() {
@@ -598,10 +663,13 @@
     const newCommKey = communityCards.map(cardKey).join(',');
     const oldHoleKey = STATE.myCards.map(cardKey).join(',');
     const oldCommKey = STATE.tableCards.map(cardKey).join(',');
-    if (newHoleKey === oldHoleKey && newCommKey === oldCommKey) return;
+    const newPlayers = detectActivePlayers();
+    const playersChanged = newPlayers !== STATE.activePlayers;
+    if (newHoleKey === oldHoleKey && newCommKey === oldCommKey && !playersChanged) return;
 
     STATE.myCards = holeCards;
     STATE.tableCards = communityCards;
+    STATE.activePlayers = newPlayers;
     STATE.cardSource = 'scan';
     STATE.pickingRank = null;
     STATE.pickTarget = holeCards.length >= 2 ? 'table' : 'hole';
@@ -839,6 +907,17 @@
       h += `</div>`;
     }
 
+    /* ─ player count (opponents) ─ */
+    const numOpp = STATE.activePlayers - 1;
+    h += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:4px 8px;border:1px solid #2f3340;border-radius:8px;background:#141821;font-size:11px;">`;
+    h += `<span style="color:#bbb;">Opponents</span>`;
+    h += `<span style="display:flex;align-items:center;gap:6px;">`;
+    h += `<span id="tpda-pk-opp-minus" style="cursor:pointer;color:${numOpp <= 1 ? '#444' : '#42a5f5'};font-size:16px;line-height:1;user-select:none;">&minus;</span>`;
+    h += `<span style="font-weight:bold;color:#fff;min-width:14px;text-align:center;">${numOpp}</span>`;
+    h += `<span id="tpda-pk-opp-plus" style="cursor:pointer;color:${numOpp >= 8 ? '#444' : '#42a5f5'};font-size:16px;line-height:1;user-select:none;">+</span>`;
+    h += `</span>`;
+    h += `</div>`;
+
     /* ─ evaluation results ─ */
     if (STATE.handEval) {
       const wp  = STATE.winProb ? Math.round(STATE.winProb.win  * 100) : 0;
@@ -949,6 +1028,23 @@
     if (rangeToggle) {
       rangeToggle.onclick = () => { STATE.showRange = !STATE.showRange; renderPanel(); };
     }
+
+    const oppMinus = document.getElementById('tpda-pk-opp-minus');
+    const oppPlus  = document.getElementById('tpda-pk-opp-plus');
+    if (oppMinus) oppMinus.onclick = () => {
+      if (STATE.activePlayers > 2) {
+        STATE.activePlayers--;
+        if (STATE.myCards.length >= 2 && allCards().length >= 5) runEval();
+        renderPanel();
+      }
+    };
+    if (oppPlus) oppPlus.onclick = () => {
+      if (STATE.activePlayers < 9) {
+        STATE.activePlayers++;
+        if (STATE.myCards.length >= 2 && allCards().length >= 5) runEval();
+        renderPanel();
+      }
+    };
   }
 
   /* ── Card polling (1s interval, like reference Torn poker helpers) ── */
