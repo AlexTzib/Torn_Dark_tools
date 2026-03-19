@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.5.2
+// @version      2.6.0
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -286,13 +286,15 @@
     try {
       const data = await crossOriginGet(url);
       const listings = data.listings || [];
-      const bazaarFloor = listings.length ? listings[0].price : null;
+      const top = listings[0] || {};
+      const bazaarFloor = top.price ?? null;
+      const bazaarSellerId = top.player_id ?? null;
       const bazaarAvg = data.bazaar_average ?? null;
       addLog(`[W3B] bazaar ${itemId}: floor=${bazaarFloor ?? 'n/a'} avg=${bazaarAvg ?? 'n/a'} (${listings.length} listings)`);
-      return { bazaarFloor, bazaarAvg, bazaarCount: listings.length };
+      return { bazaarFloor, bazaarAvg, bazaarCount: listings.length, bazaarSellerId };
     } catch (err) {
       addLog(`[W3B] bazaar ${itemId}: ${err.message}`);
-      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0 };
+      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0, bazaarSellerId: null };
     }
   }
 
@@ -329,6 +331,7 @@
           bazaarFloor: bazaar.bazaarFloor,
           bazaarAvg: bazaar.bazaarAvg,
           bazaarCount: bazaar.bazaarCount,
+          bazaarSellerId: bazaar.bazaarSellerId,
           best: best === Infinity ? null : best,
           fetchedAt: nowTs()
         };
@@ -356,7 +359,8 @@
       const floor = d.floor || null;
       const bazaar = d.bazaarFloor || null;
       const best = d.best || null;
-      return { ...p, floor, bazaar, best };
+      const bazaarSellerId = d.bazaarSellerId || null;
+      return { ...p, floor, bazaar, best, bazaarSellerId };
     });
 
     const col = STATE.sortCol;
@@ -408,18 +412,22 @@
       const floorIsBest = r.floor && r.best && r.floor === r.best;
       const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
       const marketUrl = `https://www.torn.com/page.php?sid=ItemMarket#/market/view=search&itemID=${r.id}`;
+      const bazaarUrl = r.bazaarSellerId
+        ? `https://www.torn.com/bazaar.php#/p=shop&userID=${r.bazaarSellerId}`
+        : marketUrl;
+      const bestUrl = bazaarIsBest ? bazaarUrl : marketUrl;
 
-      const priceLink = (val, cls) => {
+      const priceLink = (val, url, cls) => {
         const text = formatMoney(val);
         if (!val) return `<td${cls ? ` class="${cls}"` : ''}>${text}</td>`;
-        return `<td${cls ? ` class="${cls}"` : ''}><a class="tpda-price-link" href="${escapeHtml(marketUrl)}" target="_blank" rel="noopener">${text}</a></td>`;
+        return `<td${cls ? ` class="${cls}"` : ''}><a class="tpda-price-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${text}</a></td>`;
       };
 
       html += `<tr>`;
       html += `<td>${escapeHtml(r.name)}</td>`;
-      html += priceLink(r.floor, floorIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.bazaar, bazaarIsBest ? 'tpda-plush-best' : '');
-      html += priceLink(r.best, 'tpda-plush-best');
+      html += priceLink(r.floor, marketUrl, floorIsBest ? 'tpda-plush-best' : '');
+      html += priceLink(r.bazaar, bazaarUrl, bazaarIsBest ? 'tpda-plush-best' : '');
+      html += priceLink(r.best, bestUrl, 'tpda-plush-best');
       html += `</tr>`;
     }
 
