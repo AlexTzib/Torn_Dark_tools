@@ -765,8 +765,17 @@
   }
 
   function inferLocationState(member) {
+    // Torn API returns member.status as an object: {state, description, details, color, until}
+    // Extract the string fields from it rather than stringifying the object
+    const statusObj = member?.status;
+    const statusState = (typeof statusObj === 'string') ? statusObj : statusObj?.state;
+    const statusDesc = statusObj?.description;
+    const statusDetail = statusObj?.details || statusObj?.detail;
+
     const combined = normalizeText(
-      member?.status,
+      statusState,
+      statusDesc,
+      statusDetail,
       member?.state,
       member?.description,
       member?.details,
@@ -783,7 +792,7 @@
       return { bucket: 'hospital', label: 'Hospital' };
     }
 
-    if (/\bfederal jail\b/.test(combined)) {
+    if (/\bfederal\b/.test(combined)) {
       return { bucket: 'jail', label: 'Federal Jail' };
     }
 
@@ -795,19 +804,29 @@
       return { bucket: 'traveling', label: 'In flight' };
     }
 
-    if (/abroad|mexico|canada|argentina|hawaii|cayman|switzerland|japan|china|uae|united arab emirates|south africa/.test(combined)) {
+    if (/abroad|mexico|canada|argentina|hawaii|cayman|switzerland|japan|china|uae|united arab emirates|south africa|uk|united kingdom/.test(combined)) {
       return { bucket: 'abroad', label: 'Abroad' };
     }
 
-    if (/torn|okay/.test(combined)) {
+    if (/\bokay\b|\bin torn\b/.test(combined)) {
       return { bucket: 'torn', label: 'In Torn' };
+    }
+
+    // Fallback: check status.color — green typically means Okay/available
+    if (statusObj?.color === 'green') {
+      return { bucket: 'torn', label: 'In Torn' };
+    }
+
+    // Fallback: if member is online and no negative status detected, assume Torn
+    if (String(member?.last_action?.status || '').toLowerCase() === 'online') {
+      return { bucket: 'torn', label: 'In Torn (online)' };
     }
 
     if (!combined) {
       return { bucket: 'unknown', label: 'Unknown location' };
     }
 
-    return { bucket: 'unknown', label: 'Unknown location' };
+    return { bucket: 'unknown', label: combined.substring(0, 40) };
   }
 
   function parseRemainingFromText(text) {
@@ -839,12 +858,17 @@
   }
 
   function extractTimerInfo(member, locationBucket) {
+    // member.status is an object {state, description, details, color, until} — extract fields
+    const statusObj = (member?.status && typeof member.status === 'object') ? member.status : null;
+
     const candidates = [
+      statusObj?.description,
+      statusObj?.details,
       member?.status_detail,
       member?.status_description,
       member?.description,
       member?.details,
-      member?.status,
+      (typeof member?.status === 'string') ? member.status : null,
       member?.travel?.time_left,
       member?.travel?.remaining,
       member?.travel?.description,
@@ -854,6 +878,7 @@
     ];
 
     const unixCandidates = [
+      statusObj?.until,
       member?.status_until,
       member?.until,
       member?.until_timestamp,
@@ -968,7 +993,16 @@
 
       STATE.enemyFactionName = data?.name || data?.basic?.name || `Faction ${STATE.enemyFactionId}`;
 
-      STATE.enemyMembers = normalizeMembers(data).map(m => {
+      const rawMembers = normalizeMembers(data);
+      // Log first member's raw data for debugging location inference
+      if (rawMembers.length > 0) {
+        const sample = rawMembers[0];
+        addLog('Sample member raw — status type: ' + typeof sample.status +
+               ', status: ' + JSON.stringify(sample.status)?.substring(0, 150) +
+               ', last_action: ' + JSON.stringify(sample.last_action)?.substring(0, 100));
+      }
+
+      STATE.enemyMembers = rawMembers.map(m => {
         const action = memberLastActionInfo(m);
         const location = inferLocationState(m);
         const timer = extractTimerInfo(m, location.bucket);
@@ -997,7 +1031,13 @@
       STATE.enemyMembers.sort((a, b) => a.minutes - b.minutes);
       STATE.lastFetchTs = nowTs();
       saveTimerTrack();
-      addLog('Fetched ' + STATE.enemyMembers.length + ' members from faction ' + STATE.enemyFactionId);
+
+      // Log bucket distribution
+      const bucketCounts = {};
+      for (const m of STATE.enemyMembers) {
+        bucketCounts[m.locationBucket] = (bucketCounts[m.locationBucket] || 0) + 1;
+      }
+      addLog('Fetched ' + STATE.enemyMembers.length + ' members — buckets: ' + JSON.stringify(bucketCounts));
     } catch (err) {
       STATE.lastError = String(err?.message || err || 'Unknown error');
       addLog('Fetch error: ' + STATE.lastError);
@@ -1029,16 +1069,14 @@
       }
 
       if (m.isOnline) {
-        if (m.locationBucket === 'torn') groups.onlineTorn.push(m);
-        else if (away) groups.onlineAway.push(m);
-        else groups.unknown.push(m);
+        if (away) groups.onlineAway.push(m);
+        else groups.onlineTorn.push(m); // torn + unknown online → treat as in Torn
         continue;
       }
 
       if (m.minutes <= 60) {
-        if (m.locationBucket === 'torn') groups.recentTorn.push(m);
-        else if (away) groups.recentAway.push(m);
-        else groups.unknown.push(m);
+        if (away) groups.recentAway.push(m);
+        else groups.recentTorn.push(m); // torn + unknown recent → treat as in Torn
         continue;
       }
 
