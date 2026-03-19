@@ -111,6 +111,39 @@ Note that V2 uses different field structures:
 - **money:** `{ wallet: X, city_bank: { until: X } }` (`wallet` instead of `money_onhand`)
 - **profile:** `{ profile: { life: { current, maximum }, status: {...}, ... } }` (nested under `profile` key)
 
+### V2 Market Endpoint (bazaar & itemmarket)
+
+As of early 2025, the `bazaar` and `itemmarket` selections on the `market` endpoint are **v2-only** (error code 23 on v1).
+
+**V1 (no longer works for bazaar/itemmarket):**
+```
+GET https://api.torn.com/market/{itemId}?selections=bazaar,itemmarket&key={key}
+→ { "bazaar": [{ "cost": 12345, "quantity": 1 }, ...], "itemmarket": [{ "cost": 12345, "quantity": 1 }, ...] }
+```
+
+**V2 (current):**
+```
+GET https://api.torn.com/v2/market/{itemId}?selections=bazaar,itemmarket&key={key}
+→ { "bazaar": { "listings": [{ "price": 12345, "quantity": 1 }, ...] }, "itemmarket": { "listings": [{ "price": 12345, "quantity": 1 }, ...] } }
+```
+
+**Key differences:**
+- URL base changes from `api.torn.com/` to `api.torn.com/v2/`
+- Response wraps arrays in `{ listings: [...] }` objects
+- Field name changes from `.cost` to `.price`
+- V2 also supports header auth: `Authorization: ApiKey {key}` (query param `?key=` still works)
+
+**Error code 23** = "This selection is only available in API v2" — signals that a selection has been migrated and the v1 endpoint no longer serves it.
+
+### V2 Migration Checklist
+
+When migrating a script from v1 to v2:
+1. Change URL: `api.torn.com/{section}` → `api.torn.com/v2/{section}`
+2. Check response structure — arrays may be wrapped in `{ listings: [...] }` or nested under new keys
+3. Check field names — `cost` → `price`, `money_onhand` → `wallet`, etc.
+4. Test defensively: `Array.isArray(data.field) ? data.field : data.field?.listings || []`
+5. Normalize field names: `e.price ?? e.cost` to support both formats during transition
+
 ---
 
 ## Common API Patterns from Community Scripts

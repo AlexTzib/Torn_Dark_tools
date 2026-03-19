@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.0.0
+// @version      2.1.0
 // @description  Fetches and compares bazaar vs item market prices for all 13 Torn plushies. Shows a sortable table with floor prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -495,11 +495,19 @@
 
   async function fetchMarketData(itemId) {
     if (!STATE.apiKey) throw new Error('No API key');
-    const url = `https://api.torn.com/market/${itemId}?selections=bazaar,itemmarket&key=${STATE.apiKey}`;
+    const url = `https://api.torn.com/v2/market/${itemId}?selections=bazaar,itemmarket&key=${STATE.apiKey}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.error}`);
-    return data;
+    /* v2 returns { bazaar: { listings: [{price, quantity}, ...] }, itemmarket: { listings: [{price, quantity}, ...] } } */
+    const bazaarRaw = data.bazaar;
+    const marketRaw = data.itemmarket;
+    const bazaarArr = Array.isArray(bazaarRaw) ? bazaarRaw : (bazaarRaw?.listings || []);
+    const marketArr = Array.isArray(marketRaw) ? marketRaw : (marketRaw?.listings || []);
+    return {
+      bazaar:     bazaarArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.quantity })),
+      itemmarket: marketArr.map(e => ({ cost: e.price ?? e.cost, quantity: e.quantity }))
+    };
   }
 
   async function fetchAllPrices(force) {

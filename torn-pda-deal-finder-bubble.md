@@ -63,10 +63,12 @@ The cheapest source for each plushie is highlighted. A "Full Set (13)" row at th
 
 ### API Calls
 
-The script makes **13 API calls** per refresh (one per plushie), each fetching both bazaar and item market listings:
+The script makes **13 API calls** per refresh (one per plushie), each fetching both bazaar and item market listings via the **v2 API**:
 ```
-GET https://api.torn.com/market/{plushie_id}?selections=bazaar,itemmarket&key={key}
+GET https://api.torn.com/v2/market/{plushie_id}?selections=bazaar,itemmarket&key={key}
 ```
+
+The v2 response wraps listings in `{ listings: [{price, quantity}, ...] }` objects (v1 used flat arrays with `.cost`). The script normalizes both formats internally.
 
 Calls are made sequentially with a 250ms delay between them to stay well within Torn's rate limit (~100 requests/minute). A full refresh takes approximately 3-4 seconds.
 
@@ -92,8 +94,8 @@ Calls are made sequentially with a 250ms delay between them to stay well within 
 
 || Source | Method | Notes |
 ||---|---|---|
-|| Plushie bazaar prices | Direct API fetch (`market/{id}?selections=bazaar`) | Returns sorted listings; script takes `[0].cost` as floor |
-|| Plushie item market prices | Direct API fetch (`market/{id}?selections=itemmarket`) | Same approach — floor from first listing |
+|| Plushie bazaar prices | API v2 fetch (`v2/market/{id}?selections=bazaar`) | Returns `{ listings: [{price, quantity}] }`; script takes floor from first listing |
+|| Plushie item market prices | API v2 fetch (`v2/market/{id}?selections=itemmarket`) | Same approach — floor from first listing |
 || API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance

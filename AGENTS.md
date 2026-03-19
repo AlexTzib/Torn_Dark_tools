@@ -348,7 +348,7 @@ Every script has:
 - `CACHE_TTL_MS` — 10 minutes
 
 **Key functions:**
-- `fetchMarketData(itemId)` — Fetches `api.torn.com/market/{id}?selections=bazaar,itemmarket`
+- `fetchMarketData(itemId)` — Fetches `api.torn.com/v2/market/{id}?selections=bazaar,itemmarket`; normalizes v2 response format
 - `fetchAllPrices(force)` — Sequentially fetches all 13 plushie prices with 250ms delay, updates UI mid-fetch
 - `getSortedPlushies()` — Returns plushie rows sorted by the current sort column/direction
 - `renderPanel()` — Renders API key input (if needed), status bar, sortable price table, and debug log
@@ -357,9 +357,10 @@ Every script has:
 **Data flow:**
 1. API key resolved (saved → network-intercepted → manual entry)
 2. On panel open: loads cached prices, auto-fetches if cache older than 10 minutes
-3. `fetchAllPrices()` calls `market/{id}?selections=bazaar,itemmarket` for each plushie
-4. Extracts `bazaar[0].cost` and `itemmarket[0].cost` as floor prices
-5. `renderPanel()` displays sortable table with Bazaar, Market, Best columns and full-set total
+3. `fetchAllPrices()` calls `v2/market/{id}?selections=bazaar,itemmarket` for each plushie
+4. V2 response normalized: `{ listings: [{price, quantity}] }` → `[{cost, quantity}]` for backward compat
+5. Extracts `bazaar[0].cost` and `itemmarket[0].cost` as floor prices
+6. `renderPanel()` displays sortable table with Bazaar, Market, Best columns and full-set total
 
 **No DOM scraping.** All data comes from direct Torn API market endpoint calls.
 
@@ -637,11 +638,14 @@ for f in ['torn-assistant.user.js', 'torn-pda-deal-finder-bubble.user.js', 'torn
 
 ## Torn API Reference
 
-### Base URL
+### Base URLs
 
 ```
-https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
+V1: https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
+V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 ```
+
+> **Important:** Torn is actively migrating selections from v1 to v2-only. The `bazaar` and `itemmarket` selections on the `market` endpoint are now v2-only (error code 23 on v1). See `docs/torn-api-patterns.md` for the full migration guide.
 
 ### Sections Used by These Scripts
 
@@ -649,7 +653,7 @@ https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 |---|---|---|---|
 | `user` | `bars,cooldowns,battlestats,stocks,money,profile` | AI Advisor | Player status, bars, cooldowns, money |
 | `faction` | `basic` | AI Advisor, War Bubble | Faction members, war status |
-| `market` | `bazaar,itemmarket` | Plushie Prices | Bazaar and item market floor prices per item |
+| `market` (v2) | `bazaar,itemmarket` | Plushie Prices | Bazaar and item market floor prices per item (v2-only since early 2025) |
 | `torn` | (various, intercepted) | AI Advisor | Market data, item values |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
