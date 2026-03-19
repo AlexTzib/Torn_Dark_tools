@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Strip Poker Advisor
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      2.0.1
+// @version      2.1.0
 // @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1057,15 +1057,21 @@
 
   /* ── classCode parser (Torn casino format) ─────────────────── */
   const CLASS_SUIT_MAP = { hearts: 'h', diamonds: 'd', clubs: 'c', spades: 's' };
-  function parseClassCode(classCode) {
-    if (!classCode) return null;
-    const m = classCode.match(/^(hearts|diamonds|clubs|spades)-(\d+|[JQKA])$/i);
+  function parseCardClass(className) {
+    if (!className) return null;
+    /* Match "(hearts|diamonds|clubs|spades)-(rank)" anywhere in className.
+       Torn CSS modules may append hashes like "hearts-2___xYz1a". */
+    const m = className.match(/(clubs|spades|hearts|diamonds)-([0-9TJQKA]+)/i);
     if (!m) return null;
     const suit = CLASS_SUIT_MAP[m[1].toLowerCase()];
-    const rank = m[2].toUpperCase();
+    let rank = m[2].toUpperCase();
+    /* Torn uses "10" in class names; our RANK_VAL expects "10" (not "T") */
+    if (rank === 'T') rank = '10';
     if (!suit || !RANK_VAL[rank]) return null;
     return { rank, suit, value: RANK_VAL[rank] };
   }
+  /* Backward-compat alias */
+  function parseClassCode(classCode) { return parseCardClass(classCode); }
 
   /* ── XHR / fetch interception for poker game data ──────────── */
   function handlePokerPayload(data) {
@@ -1451,83 +1457,139 @@
     renderPanel();
   }
 
-  /* ── DOM scanning (best-effort, Hold'em aware) ──────────────── */
-  function scanDom() {
+  /* ── DOM scanning — Torn Hold'em specific ─────────────────── */
+
+  /* Extract cards from elements matching Torn's CSS-module card classes.
+     Torn's holdem uses React CSS modules, so class names look like:
+       playerMeGateway___AEI5_, hand___aOp4l, card___t7csZ,
+       front___osz1p, communityCards___cGHD3
+     The hashes change between builds, so we match by base name prefix. */
+
+  function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
+
+  function extractCardsFrom(elements) {
     const cards = [];
     const seen  = new Set();
-
-    function tryAdd(rank, suit) {
-      if (!rank || !suit) return;
-      rank = rank.toUpperCase();
-      suit = suit.toLowerCase();
-      if (!RANK_VAL[rank] || !SUITS.includes(suit)) return;
-      const k = rank + suit;
-      if (seen.has(k)) return;
-      seen.add(k);
-      cards.push({ rank, suit, value: RANK_VAL[rank] });
-    }
-
-    /* Torn casino CSS-class card format: elements with class like "hearts-2", "spades-K" */
-    document.querySelectorAll('[class*="hearts-"],[class*="diamonds-"],[class*="clubs-"],[class*="spades-"]').forEach(el => {
+    elements.forEach(el => {
       const cls = el.className || '';
-      const matches = cls.match(/\b(hearts|diamonds|clubs|spades)-(\d+|[JQKA])\b/gi);
-      if (matches) {
-        matches.forEach(cc => {
-          const parsed = parseClassCode(cc);
-          if (parsed) tryAdd(parsed.rank, parsed.suit);
-        });
+      const parsed = parseCardClass(cls);
+      if (parsed) {
+        const k = cardKey(parsed);
+        if (!seen.has(k)) { seen.add(k); cards.push(parsed); }
       }
     });
+    return cards;
+  }
 
-    document.querySelectorAll('[data-card],[data-rank]').forEach(el => {
-      if (el.dataset.card) {
-        const m = el.dataset.card.match(/^(10|[2-9]|[JQKA])([cdhs])$/i);
-        if (m) tryAdd(m[1], m[2]);
+  function scanDom() {
+    let holeCards = [];
+    let communityCards = [];
+
+    /* ─── Strategy 1: Torn Hold'em specific selectors ─────────
+       Player area:     [class*="playerMeGateway"] [class*="hand"] [class*="card"] [class*="front"] > div
+       Community area:  [class*="communityCards"] [class*="front"] > div
+       We use partial class matching to survive CSS-module hash changes. */
+
+    const playerCardEls = qsa('[class*="playerMeGateway"] [class*="hand"] [class*="card"] [class*="front"] > div');
+    const communityCardEls = qsa('[class*="communityCards"] [class*="front"] > div');
+
+    if (playerCardEls.length > 0 || communityCardEls.length > 0) {
+      holeCards = extractCardsFrom(playerCardEls);
+      communityCards = extractCardsFrom(communityCardEls);
+      if (holeCards.length > 0 || communityCards.length > 0) {
+        addLog(`Torn holdem DOM: ${holeCards.length} hole + ${communityCards.length} community`);
       }
-      if (el.dataset.rank && el.dataset.suit) tryAdd(el.dataset.rank, el.dataset.suit);
-    });
-
-    document.querySelectorAll('img').forEach(img => {
-      const src = (img.src || '') + ' ' + (img.alt || '');
-      if (src.includes('back') || src.includes('blank')) return;
-      const m = src.match(/([2-9]|10|[jJqQkKaA])[\s_-]?(?:of[\s_-]?)?([cCdDhHsS])/);
-      if (m) tryAdd(m[1], m[2]);
-      const m2 = src.match(/([cdhs])[\s_-]?([2-9]|10|[jqka])/i);
-      if (m2) tryAdd(m2[2], m2[1]);
-    });
-
-    const symMap = { '\u2663': 'c', '\u2666': 'd', '\u2665': 'h', '\u2660': 's' };
-    document.querySelectorAll('[class*="card" i]').forEach(el => {
-      if (el.children.length > 5) return;
-      const txt = (el.textContent || '').trim();
-      if (txt.length > 5) return;
-      const m = txt.match(/^(10|[2-9]|[JQKA])\s*([\u2663\u2666\u2665\u2660])$/i) ||
-                txt.match(/^([\u2663\u2666\u2665\u2660])\s*(10|[2-9]|[JQKA])$/i);
-      if (m) {
-        if (symMap[m[1]]) tryAdd(m[2], symMap[m[1]]);
-        else if (symMap[m[2]]) tryAdd(m[1], symMap[m[2]]);
-      }
-    });
-
-    if (cards.length > 0 && cards.length <= 7) {
-      /* Don't overwrite XHR-detected hand with fewer DOM-scanned cards */
-      const currentTotal = STATE.myCards.length + STATE.tableCards.length;
-      if (STATE.cardSource === 'xhr' && currentTotal >= cards.length) {
-        addLog(`Scan: ${cards.length} card(s) found but XHR data preferred`);
-        return;
-      }
-      /* Heuristic for Hold'em: first 2 cards are hole, rest are community */
-      STATE.myCards = cards.slice(0, 2);
-      STATE.tableCards = cards.slice(2, 7);
-      STATE.cardSource = 'scan';
-      STATE.pickingRank = null;
-      STATE.pickTarget = STATE.myCards.length >= 2 ? 'table' : 'hole';
-      if (STATE.myCards.length >= 2 && cards.length >= 5) runEval();
-      addLog(`Scanned ${cards.length} card(s): ${STATE.myCards.length} hole + ${STATE.tableCards.length} community`);
-      renderPanel();
-    } else {
-      addLog(`Scan: ${cards.length} card(s) found \u2014 ${cards.length === 0 ? 'none detected, use manual input' : 'too many, ignored'}`);
     }
+
+    /* ─── Strategy 2: Generic suit-class scan (fallback) ──────
+       Any element whose className contains hearts-/diamonds-/clubs-/spades- */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const allCardEls = qsa('[class*="hearts-"],[class*="diamonds-"],[class*="clubs-"],[class*="spades-"]');
+      const allCards = extractCardsFrom(allCardEls);
+      if (allCards.length > 0 && allCards.length <= 7) {
+        /* Heuristic: first 2 are hole, rest are community */
+        holeCards = allCards.slice(0, 2);
+        communityCards = allCards.slice(2);
+        addLog(`Generic class scan: ${holeCards.length} hole + ${communityCards.length} community`);
+      }
+    }
+
+    /* ─── Strategy 3: data-card / data-rank attributes ──────── */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const cards = [];
+      const seen = new Set();
+      qsa('[data-card],[data-rank]').forEach(el => {
+        let r, s;
+        if (el.dataset.card) {
+          const m = el.dataset.card.match(/^(10|[2-9]|[JQKA])([cdhs])$/i);
+          if (m) { r = m[1].toUpperCase(); s = m[2].toLowerCase(); }
+        }
+        if (!r && el.dataset.rank && el.dataset.suit) {
+          r = el.dataset.rank.toUpperCase(); s = el.dataset.suit.toLowerCase();
+        }
+        if (r && s && RANK_VAL[r] && SUITS.includes(s)) {
+          const k = r + s;
+          if (!seen.has(k)) { seen.add(k); cards.push({ rank: r, suit: s, value: RANK_VAL[r] }); }
+        }
+      });
+      if (cards.length > 0 && cards.length <= 7) {
+        holeCards = cards.slice(0, 2);
+        communityCards = cards.slice(2);
+      }
+    }
+
+    /* ─── Strategy 4: img src/alt patterns ────────────────────── */
+    if (holeCards.length === 0 && communityCards.length === 0) {
+      const cards = [];
+      const seen = new Set();
+      function tryAdd(rank, suit) {
+        if (!rank || !suit) return;
+        rank = rank.toUpperCase(); suit = suit.toLowerCase();
+        if (!RANK_VAL[rank] || !SUITS.includes(suit)) return;
+        const k = rank + suit;
+        if (seen.has(k)) return;
+        seen.add(k);
+        cards.push({ rank, suit, value: RANK_VAL[rank] });
+      }
+      qsa('img').forEach(img => {
+        const src = (img.src || '') + ' ' + (img.alt || '');
+        if (src.includes('back') || src.includes('blank')) return;
+        const m = src.match(/([2-9]|10|[jJqQkKaA])[\s_-]?(?:of[\s_-]?)?([cCdDhHsS])/);
+        if (m) tryAdd(m[1], m[2]);
+        const m2 = src.match(/([cdhs])[\s_-]?([2-9]|10|[jqka])/i);
+        if (m2) tryAdd(m2[2], m2[1]);
+      });
+      if (cards.length > 0 && cards.length <= 7) {
+        holeCards = cards.slice(0, 2);
+        communityCards = cards.slice(2);
+      }
+    }
+
+    const totalFound = holeCards.length + communityCards.length;
+
+    if (totalFound === 0) return; /* silent — polling will retry */
+
+    /* Don't overwrite if we already have more/equal cards from a better source */
+    const currentTotal = STATE.myCards.length + STATE.tableCards.length;
+    if (STATE.cardSource === 'manual') return;
+    if (currentTotal >= totalFound && STATE.cardSource === 'scan') return;
+
+    /* Check if anything actually changed */
+    const newHoleKey = holeCards.map(cardKey).join(',');
+    const newCommKey = communityCards.map(cardKey).join(',');
+    const oldHoleKey = STATE.myCards.map(cardKey).join(',');
+    const oldCommKey = STATE.tableCards.map(cardKey).join(',');
+    if (newHoleKey === oldHoleKey && newCommKey === oldCommKey) return;
+
+    STATE.myCards = holeCards;
+    STATE.tableCards = communityCards;
+    STATE.cardSource = 'scan';
+    STATE.pickingRank = null;
+    STATE.pickTarget = holeCards.length >= 2 ? 'table' : 'hole';
+    if (holeCards.length >= 2 && totalFound >= 5) runEval();
+    else { STATE.handEval = null; STATE.winProb = null; STATE.suggestion = suggest(null); STATE.oppRange = null; }
+    addLog(`Cards: ${holeCards.length} hole + ${communityCards.length} community`);
+    renderPanel();
   }
 
   /* ── styles ────────────────────────────────────────────────── */
@@ -1870,7 +1932,19 @@
     }
   }
 
-  /* ── MutationObserver for auto-scan ──────────────────────── */
+  /* ── Card polling (1s interval, like reference Torn poker helpers) ── */
+  let _pollTimer = null;
+  function startCardPolling() {
+    if (_pollTimer) return;
+    _pollTimer = setInterval(() => {
+      /* Only poll when on the holdem page */
+      if (!/sid=holdem/i.test(window.location.href) && !/poker/i.test(window.location.href)) return;
+      scanDom();
+    }, 1000);
+    addLog('Card polling started (1s interval)');
+  }
+
+  /* ── MutationObserver for auto-scan (backup) ──────────────── */
   let _scanTimer = null;
   function startCardObserver() {
     const target = document.getElementById('mainContainer') || document.body;
@@ -1878,11 +1952,7 @@
       /* Debounce: wait 500ms after last mutation before scanning */
       if (_scanTimer) clearTimeout(_scanTimer);
       _scanTimer = setTimeout(() => {
-        /* Only scan if panel is visible (user has opened the advisor) */
-        const panel = getPanelEl();
-        if (panel && panel.style.display !== 'none') {
-          scanDom();
-        }
+        scanDom();
       }, 500);
     });
     observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
@@ -1896,10 +1966,11 @@
     ensureStyles();
     createBubble();
     createPanel();
+    startCardPolling();
     startCardObserver();
     window.addEventListener('resize', onResize);
-    addLog('Strip Poker Advisor v2.0.1 initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
-    console.log('[Strip Poker Advisor] v2.0.1 Started.');
+    addLog('Strip Poker Advisor v2.1.0 initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
+    console.log('[Strip Poker Advisor] v2.1.0 Started.');
   }
 
   /* Install network hooks immediately (before DOM is ready) so we catch early game data */
