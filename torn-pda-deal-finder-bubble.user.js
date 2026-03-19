@@ -244,9 +244,11 @@
         width: 100%;
         border-collapse: collapse;
         font-size: 12px;
+        color: #e0e0e0;
       }
       .tpda-plush-table th {
         background: #1c1d24;
+        color: #ccc;
         padding: 6px 8px;
         text-align: left;
         cursor: pointer;
@@ -257,6 +259,7 @@
       .tpda-plush-table th:hover { background: #2a2c36; }
       .tpda-plush-table td {
         padding: 5px 8px;
+        color: #e0e0e0;
         border-bottom: 1px solid #1e1f28;
         white-space: nowrap;
       }
