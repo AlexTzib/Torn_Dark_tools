@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Safe AI Advisor Bubble
 // @namespace    alex.torn.pda.safe.ai.bubble
-// @version      3.1.0
+// @version      3.2.0
 // @description  Safe local Torn PDA advisor with draggable chat-head bubble and expandable panel
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -78,6 +78,10 @@
     YAZ: { shares: 1000000, type: 'passive', benefit: 'Free Banner Advertising' }
   };
 
+  // ── Xanax planning constants ──
+  const XAN_ENERGY = 250;        // energy per Xanax
+  const XAN_DRUG_CD = 16200;     // ~4h 30m drug cooldown after Xanax
+
   function nowTs() { return Date.now(); }
 
   function safeJsonParse(text) {
@@ -106,7 +110,7 @@
   }
 
   function formatSeconds(sec) {
-    sec = Number(sec || 0);
+    sec = Math.floor(Number(sec || 0));
     if (sec <= 0) return 'Ready';
     const d = Math.floor(sec / 86400);
     const h = Math.floor((sec % 86400) / 3600);
@@ -116,7 +120,7 @@
     if (d) parts.push(`${d}d`);
     if (h) parts.push(`${h}h`);
     if (m) parts.push(`${m}m`);
-    if (!d && !h) parts.push(`${s}s`);
+    parts.push(`${s}s`);
     return parts.join(' ');
   }
 
@@ -192,7 +196,9 @@
         addLog('energy type: ' + typeof userData.energy + ', value: ' + JSON.stringify(userData.energy)?.substring(0, 120));
         addLog('strength type: ' + typeof userData.strength + ', value: ' + JSON.stringify(userData.strength)?.substring(0, 60));
         addLog('money_onhand type: ' + typeof userData.money_onhand + ', value: ' + String(userData.money_onhand));
+        addLog('city_bank: ' + JSON.stringify(userData.city_bank)?.substring(0, 100));
         addLog('cooldowns: ' + JSON.stringify(userData.cooldowns)?.substring(0, 120));
+        addLog('stocks type: ' + typeof userData.stocks + ', keys: ' + (userData.stocks ? Object.keys(userData.stocks).slice(0, 5).join(',') : 'none'));
         mergeUserData(userData);
       } else if (userData?.error) {
         addLog('User API error: ' + (userData.error.error || JSON.stringify(userData.error)));
@@ -215,6 +221,20 @@
       }
     } catch (e) {
       addLog('Faction fetch error: ' + (e.message || e));
+    }
+
+    try {
+      const tornUrl = `https://api.torn.com/torn/?selections=stocks&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
+      const tornRes = await fetch(tornUrl);
+      const tornData = await tornRes.json();
+      if (tornData && !tornData.error) {
+        addLog('Torn stocks API received — keys: ' + (tornData.stocks ? Object.keys(tornData.stocks).slice(0, 5).join(',') : 'none'));
+        mergeTornData(tornData);
+      } else if (tornData?.error) {
+        addLog('Torn stocks error: ' + (tornData.error.error || JSON.stringify(tornData.error)));
+      }
+    } catch (e) {
+      addLog('Torn stocks fetch error: ' + (e.message || e));
     }
   }
 
@@ -292,92 +312,87 @@
 
     const eCur = Number(bars.energy?.current || 0);
     const eMax = Number(bars.energy?.maximum || 0);
-    const hCur = Number(bars.happy?.current || 0);
-    const hMax = Number(bars.happy?.maximum || 0);
     const drugCd = Number(cds.drug || 0);
     const boosterCd = Number(cds.booster || 0);
-    const medicalCd = Number(cds.medical || 0);
 
-    if (eMax <= 0 && hMax <= 0) {
+    if (eMax <= 0) {
       return {
+        ready: false,
         label: 'No data yet',
-        score: 0,
-        energy: 'Unknown',
-        happy: 'Unknown',
-        recommendation: 'Open a Torn PDA page that loads user data, then refresh this panel.',
         notes: ['No cached user API response detected yet']
       };
     }
 
-    let score = 0;
+    const TARGET = 1000;
     const notes = [];
 
-    if (drugCd <= 0) { score += 3; notes.push('Drug cooldown ready'); }
-    else notes.push(`Drug cooldown: ${formatSeconds(drugCd)}`);
+    // Status checks
+    notes.push(`Energy: ${formatNumber(eCur)} / ${formatNumber(eMax)}`);
+    notes.push(drugCd > 0 ? `Drug CD: ${formatSeconds(drugCd)}` : 'Drug CD: Ready');
+    notes.push(boosterCd > 0 ? `Booster CD: ${formatSeconds(boosterCd)}` : 'Booster CD: Ready');
 
-    if (boosterCd <= 0) { score += 3; notes.push('Booster cooldown ready'); }
-    else notes.push(`Booster cooldown: ${formatSeconds(boosterCd)}`);
-
-    if (medicalCd > 0) {
-      score -= 1;
-      notes.push(`Medical cooldown active: ${formatSeconds(medicalCd)}`);
+    if (eCur >= TARGET) {
+      return {
+        ready: true,
+        label: `Ready! Energy is ${formatNumber(eCur)} (>= ${formatNumber(TARGET)})`,
+        notes
+      };
     }
 
-    if (eMax > 0) {
-      const eRatio = eCur / eMax;
-      if (eRatio <= 0.35) {
-        score += 2;
-        notes.push('Energy is low enough for a jump setup window');
-      } else if (eRatio <= 0.65) {
-        score += 1;
-        notes.push('Energy is moderate');
-      } else {
-        notes.push('Energy is already fairly high');
+    // Calculate Xanax plan
+    const deficit = TARGET - eCur;
+    const xanNeeded = Math.ceil(deficit / XAN_ENERGY);
+    let totalWait = 0;
+
+    if (drugCd > 0) totalWait += drugCd;
+    if (xanNeeded > 1) totalWait += (xanNeeded - 1) * XAN_DRUG_CD;
+
+    notes.push('');
+    notes.push(`Deficit: ${formatNumber(deficit)}E \u2192 need ${xanNeeded} Xanax`);
+    if (drugCd > 0) {
+      notes.push(`Wait ${formatSeconds(drugCd)} for current drug CD before first Xanax`);
+    }
+    for (let i = 1; i <= xanNeeded; i++) {
+      const eBefore = eCur + (i - 1) * XAN_ENERGY;
+      const eAfter = Math.min(eCur + i * XAN_ENERGY, eCur + xanNeeded * XAN_ENERGY);
+      notes.push(`Xanax #${i}: ${formatNumber(Math.round(eBefore))}E \u2192 ${formatNumber(Math.round(eAfter))}E`);
+      if (i < xanNeeded) {
+        notes.push(`  \u2514 Wait ${formatSeconds(XAN_DRUG_CD)} drug CD`);
       }
     }
+    notes.push('');
+    notes.push(totalWait > 0
+      ? `Total time to ${formatNumber(TARGET)}E: ${formatSeconds(totalWait)}`
+      : `Take ${xanNeeded} Xanax now to reach ${formatNumber(TARGET)}E!`);
 
-    if (hMax > 0) {
-      const hRatio = hCur / hMax;
-      if (hRatio < 1.2) notes.push('Happy is not boosted much above base yet');
-      else if (hRatio < 2.5) notes.push('Happy is boosted, but not very high');
-      else notes.push('Happy is strongly boosted');
-    }
+    const ready = totalWait === 0;
+    const label = ready
+      ? `Take ${xanNeeded} Xanax now!`
+      : `${xanNeeded} Xanax needed (${formatSeconds(totalWait)} wait)`;
 
-    let label = 'Not ready';
-    if (score >= 7) label = 'Strong jump candidate';
-    else if (score >= 5) label = 'Possible jump window';
-    else if (score >= 3) label = 'Building window';
-
-    let recommendation = 'Keep waiting and avoid wasting cooldown timing.';
-    if (label === 'Strong jump candidate') {
-      recommendation = 'Your bars and cooldowns look favorable for a jump-style training window. Double-check your intended item sequence manually before committing.';
-    } else if (label === 'Possible jump window') {
-      recommendation = 'You may be close to a workable jump setup. Main blockers are likely energy level or one remaining cooldown.';
-    } else if (label === 'Building window') {
-      recommendation = 'You are partway there, but this does not look like an ideal jump state yet.';
-    }
-
-    return {
-      label,
-      score,
-      energy: `${formatNumber(eCur)} / ${formatNumber(eMax)}`,
-      happy: `${formatNumber(hCur)} / ${formatNumber(hMax)}`,
-      recommendation,
-      notes
-    };
+    return { ready, label, notes, xanNeeded, totalWait };
   }
 
   function buildStockRoiRows(userStocks, tornStocks) {
     const marketByTicker = new Map();
+    const idToMarket = new Map();
     for (const s of tornStocks) {
       const ticker = getTicker(s);
       if (ticker) marketByTicker.set(ticker, s);
+      const id = String(s.stock_id ?? s.id ?? '');
+      if (id) idToMarket.set(id, s);
     }
 
     const rows = [];
 
     for (const s of userStocks) {
-      const ticker = getTicker(s);
+      let ticker = getTicker(s);
+      // If no ticker on user stock, look it up from market data by stock_id
+      if (!ticker) {
+        const id = String(s.stock_id ?? s.id ?? '');
+        const market = idToMarket.get(id);
+        if (market) ticker = getTicker(market);
+      }
       const rule = STOCK_RULES[ticker];
       if (!ticker || !rule) continue;
 
@@ -1079,6 +1094,39 @@
     const alignment = evaluateBoosterWarAlignment(user, factionData);
     const warInfo = alignment.warInfo;
 
+    // Energy readiness for war
+    const bars = user?.bars || {};
+    const cds = user?.cooldowns || {};
+    const eCur = Number(bars.energy?.current || 0);
+    const eMax = Number(bars.energy?.maximum || 0);
+    const drugCd = Number(cds.drug || 0);
+    const TARGET = 1000;
+
+    let energyHtml = '';
+    if (eMax <= 0) {
+      energyHtml = '<div style="color:#bbb;">No energy data yet</div>';
+    } else if (eCur >= TARGET) {
+      energyHtml = `<div style="color:#8dff8d;">Energy: ${formatNumber(eCur)} — Ready for war!</div>`;
+    } else {
+      const deficit = TARGET - eCur;
+      const xanNeeded = Math.ceil(deficit / XAN_ENERGY);
+      let totalWait = drugCd > 0 ? drugCd : 0;
+      if (xanNeeded > 1) totalWait += (xanNeeded - 1) * XAN_DRUG_CD;
+
+      const nextWar = warInfo.wars[0];
+      let timeNote = '';
+      if (nextWar && nextWar.startsIn > 0) {
+        if (totalWait < nextWar.startsIn) {
+          timeNote = ` — ready ${formatSeconds(nextWar.startsIn - totalWait)} before war`;
+        } else {
+          timeNote = ` — NOT ready in time! (${formatSeconds(totalWait - nextWar.startsIn)} late)`;
+        }
+      }
+
+      const color = (nextWar && nextWar.startsIn > 0 && totalWait < nextWar.startsIn) ? '#ffd166' : '#ff6b6b';
+      energyHtml = `<div style="color:${color};">Energy: ${formatNumber(eCur)} — need ${xanNeeded} Xanax (${formatSeconds(totalWait)} wait)${timeNote}</div>`;
+    }
+
     let warsHtml = '';
     if (warInfo.wars.length) {
       warsHtml = warInfo.wars.map(w => `
@@ -1091,11 +1139,12 @@
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">War Timing & Booster Alignment</div>
+        <div style="font-weight:bold;margin-bottom:6px;">War Timing & Energy Readiness</div>
+        ${energyHtml}
         <div style="margin-bottom:6px;">Booster CD: <strong>${alignment.boosterCd <= 0 ? 'Ready' : formatSeconds(alignment.boosterCd)}</strong></div>
         ${warsHtml || '<div style="color:#bbb;">No wars detected. Visit your faction page to cache war data.</div>'}
         <div style="margin-top:8px;padding-top:6px;border-top:1px solid #2a2d38;">
-          <div style="font-weight:bold;margin-bottom:4px;">Alignment</div>
+          <div style="font-weight:bold;margin-bottom:4px;">Booster Alignment</div>
           ${alignment.notes.map(n => `<div style="color:${alignment.aligned ? '#8dff8d' : '#ffd166'};">• ${escapeHtml(n)}</div>`).join('')}
         </div>
       </div>
@@ -1106,13 +1155,15 @@
     const hj = evaluateHappyJump(user);
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Happy Jump Advisor</div>
-        <div>Status: <strong>${escapeHtml(hj.label)}</strong> (score ${hj.score})</div>
-        <div>Energy: ${escapeHtml(hj.energy)}</div>
-        <div>Happy: ${escapeHtml(hj.happy)}</div>
-        <div style="margin-top:6px;color:#ddd;">${escapeHtml(hj.recommendation)}</div>
-        <div style="margin-top:8px;font-size:12px;color:#bbb;">
-          ${hj.notes.map(n => `• ${escapeHtml(n)}`).join('<br>')}
+        <div style="font-weight:bold;margin-bottom:6px;">Happy Jump — Xanax Planner</div>
+        <div style="color:${hj.ready ? '#8dff8d' : '#ffd166'};margin-bottom:6px;">
+          ${escapeHtml(hj.label)}
+        </div>
+        <div style="font-size:12px;color:#bbb;">
+          ${hj.notes.map(n => n === '' ? '<div style="height:4px;"></div>' : `<div>\u2022 ${escapeHtml(n)}</div>`).join('')}
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:#666;">
+          Assumes ${XAN_ENERGY}E per Xanax, ~${formatSeconds(XAN_DRUG_CD)} drug CD per use.
         </div>
       </div>
     `;
@@ -1197,8 +1248,8 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Status</div>
         <div>Selections cached: ${getSelectionsPresent(user).join(', ') || 'none yet'}</div>
-        <div>Energy: ${formatBar(bars.energy)}</div>
-        <div>Nerve: ${formatBar(bars.nerve)}</div>
+        <div>Energy: ${formatBar(bars.energy)}${bars.energy?.fulltime > 0 ? ` (full in ${formatSeconds(bars.energy.fulltime)})` : bars.energy?.current != null && bars.energy.current >= bars.energy.maximum ? ' (Full)' : ''}</div>
+        <div>Nerve: ${formatBar(bars.nerve)}${bars.nerve?.fulltime > 0 ? ` (full in ${formatSeconds(bars.nerve.fulltime)})` : bars.nerve?.current != null && bars.nerve.current >= bars.nerve.maximum ? ' (Full)' : ''}</div>
         <div>Happy: ${formatBar(bars.happy)}</div>
         <div>Drug CD: ${formatSeconds(cds.drug)}</div>
         <div>Booster CD: ${formatSeconds(cds.booster)}</div>
@@ -1209,14 +1260,13 @@
 
       ${renderHappyJumpCard(user)}
 
-      ${renderDrugFreeEnergyCard(user)}
-
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Battle stats</div>
         <div>STR: ${battlestats.strength != null ? formatNumber(battlestats.strength) : '—'}</div>
         <div>SPD: ${battlestats.speed != null ? formatNumber(battlestats.speed) : '—'}</div>
         <div>DEX: ${battlestats.dexterity != null ? formatNumber(battlestats.dexterity) : '—'}</div>
         <div>DEF: ${battlestats.defense != null ? formatNumber(battlestats.defense) : '—'}</div>
+        <div style="border-top:1px solid #2a2d38;margin-top:4px;padding-top:4px;font-weight:bold;">Total: ${battlestats.total != null ? formatNumber(battlestats.total) : '—'}</div>
       </div>
 
       ${renderStockRoiCard(userStocks, tornStocks)}
@@ -1224,7 +1274,9 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">Funds seen</div>
         <div>Cash on hand: ${money.cash_on_hand != null ? formatMoney(money.cash_on_hand) : '—'}</div>
-        <div>Bank: ${money.money_bank != null ? formatMoney(money.money_bank) : '—'}</div>
+        <div>City Bank: ${money.city_bank != null ? formatMoney(money.city_bank) : '—'}</div>
+        <div>Vault: ${money.vault != null ? formatMoney(money.vault) : '—'}</div>
+        <div>Cayman: ${money.cayman != null ? formatMoney(money.cayman) : '—'}</div>
       </div>
 
       <div style="padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
@@ -1347,20 +1399,29 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
     }
 
     // --- Money normalization ---
-    // V1: money_onhand / vault_amount at top level
-    // V2: nested under money.wallet / money.cayman_bank
+    // V1: money_onhand / vault_amount / city_bank / cayman_bank at top level
+    // V2: nested under money.wallet / money.cayman_bank / money.city_bank
     if (!isObject(u.money)) u.money = {};
     if (u.money_onhand != null) u.money.cash_on_hand = Number(u.money_onhand);
     else if (u.money.wallet != null) u.money.cash_on_hand = Number(u.money.wallet);
-    if (u.vault_amount != null) u.money.money_bank = Number(u.vault_amount);
-    else if (u.money.cayman_bank != null) u.money.money_bank = Number(u.money.cayman_bank);
+    // City bank
+    if (isObject(u.city_bank) && u.city_bank.amount != null) u.money.city_bank = Number(u.city_bank.amount);
+    else if (isObject(u.money.city_bank) && u.money.city_bank.amount != null) u.money.city_bank = Number(u.money.city_bank.amount);
+    // Vault
+    if (u.vault_amount != null) u.money.vault = Number(u.vault_amount);
+    else if (u.money.vault != null && typeof u.money.vault === 'number') u.money.vault = u.money.vault;
+    // Cayman
+    if (u.cayman_bank != null && !isObject(u.cayman_bank)) u.money.cayman = Number(u.cayman_bank);
+    else if (u.money.cayman_bank != null && !isObject(u.money.cayman_bank)) u.money.cayman = Number(u.money.cayman_bank);
 
     // --- Diagnostic logging ---
     const eC = u.bars?.energy?.current;
     const eM = u.bars?.energy?.maximum;
     addLog('Merge done — bars.energy: ' + (eC != null ? eC + '/' + eM : 'MISSING') +
            ', strength: ' + (u.battlestats?.strength ?? 'n/a') +
-           ', cash: ' + (u.money?.cash_on_hand ?? 'n/a'));
+           ', cash: ' + (u.money?.cash_on_hand ?? 'n/a') +
+           ', city_bank: ' + (u.money?.city_bank ?? 'n/a') +
+           ', vault: ' + (u.money?.vault ?? 'n/a'));
     if (!u.bars?.energy || u.bars.energy.current == null) {
       addLog('WARNING: bars.energy is ' + JSON.stringify(u.bars?.energy) +
              ', raw u.energy is ' + JSON.stringify(u.energy)?.substring(0, 100) +
