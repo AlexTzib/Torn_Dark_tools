@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.4.1
+// @version      3.5.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -34,6 +34,25 @@
   const TIMER_TRACK_MAX_ENTRIES = 500;
   const TIMER_TRACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
   const SECTION_MEMBER_CAP = 15; /* Max members shown per section before "Show all" */
+
+  /* ── Stat estimation (TornPDA algorithm) ─────────────────────── */
+  const RANK_SCORES = {
+    'Absolute beginner': 1, 'Beginner': 2, 'Inexperienced': 3, 'Rookie': 4,
+    'Novice': 5, 'Below average': 6, 'Average': 7, 'Reasonable': 8,
+    'Above average': 9, 'Competent': 10, 'Highly competent': 11, 'Veteran': 12,
+    'Distinguished': 13, 'Highly distinguished': 14, 'Professional': 15,
+    'Star': 16, 'Master': 17, 'Outstanding': 18, 'Celebrity': 19,
+    'Supreme': 20, 'Idolized': 21, 'Champion': 22, 'Heroic': 23,
+    'Legendary': 24, 'Elite': 25, 'Invincible': 26
+  };
+  const LEVEL_TRIGGERS   = [2, 6, 11, 26, 31, 50, 71, 100];
+  const CRIMES_TRIGGERS  = [100, 5000, 10000, 20000, 30000, 50000];
+  const NW_TRIGGERS      = [5e6, 5e7, 5e8, 5e9, 5e10];
+  const STAT_RANGES      = ['< 2k', '2k - 25k', '20k - 250k', '200k - 2.5M', '2M - 25M', '20M - 250M', '> 200M'];
+  const STAT_COLORS      = ['#8dff8d', '#8dff8d', '#bfe89c', '#ffd166', '#ffa94d', '#ff6b6b', '#ff4040'];
+  const PROFILE_CACHE_KEY = `${SCRIPT_KEY}_profile_cache`;
+  const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
+  const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
   const SECTION_META = {
     onlineTorn:   { title: 'Online in Torn',                     cls: 'war-on' },
     onlineAway:   { title: 'Online abroad / in flight',          cls: 'war-abroad' },
@@ -61,6 +80,10 @@
     timerTrack: loadTimerTrack(),
     collapsed: loadCollapsedState(),
     showAll: {}, /* tracks which sections are expanded beyond SECTION_MEMBER_CAP */
+    profileCache: {}, /* id → { rank, level, crimesTotal, networth, estimate, fetchedAt } */
+    scanning: false,
+    scanProgress: 0,
+    scanTotal: 0,
     ui: {
       minimized: true,
       zIndexBase: 999970
@@ -564,6 +587,105 @@
   function saveCollapsedState() {
     setStorage(`${SCRIPT_KEY}_collapsed`, STATE.collapsed);
   }
+
+  /* ── Stat estimation ─────────────────────────────────────────── */
+
+  function loadProfileCache() {
+    const raw = getStorage(PROFILE_CACHE_KEY, {});
+    const now = nowTs();
+    const pruned = {};
+    for (const [id, p] of Object.entries(raw)) {
+      if (p && (now - (p.fetchedAt || 0)) < PROFILE_CACHE_TTL) pruned[id] = p;
+    }
+    return pruned;
+  }
+
+  function saveProfileCache() {
+    setStorage(PROFILE_CACHE_KEY, STATE.profileCache);
+  }
+
+  function estimateStats(rank, level, crimesTotal, networth) {
+    const rs = RANK_SCORES[rank];
+    if (!rs) return null;
+    const ls = LEVEL_TRIGGERS.filter(t => t <= (level || 0)).length;
+    const cs = CRIMES_TRIGGERS.filter(t => t <= (crimesTotal || 0)).length;
+    const ns = NW_TRIGGERS.filter(t => t <= (networth || 0)).length;
+    const idx = Math.max(0, Math.min(STAT_RANGES.length - 1, rs - ls - cs - ns - 1));
+    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx };
+  }
+
+  async function fetchMemberProfile(memberId) {
+    const cached = STATE.profileCache[memberId];
+    if (cached && (nowTs() - cached.fetchedAt) < PROFILE_CACHE_TTL) return cached;
+    if (!STATE.apiKey) return null;
+
+    try {
+      const url = `https://api.torn.com/user/${encodeURIComponent(memberId)}?selections=profile,personalstats,criminalrecord&key=${encodeURIComponent(STATE.apiKey)}`;
+      const res = await fetch(url, { method: 'GET' });
+      const data = await res.json();
+      if (data?.error) {
+        addLog(`Profile ${memberId}: API error ${data.error.code || ''}`);
+        return null;
+      }
+
+      const crimesTotal = (() => {
+        const cr = data.criminalrecord;
+        if (!cr || typeof cr !== 'object') return 0;
+        let sum = 0;
+        for (const v of Object.values(cr)) sum += Number(v) || 0;
+        return sum;
+      })();
+
+      const profile = {
+        rank: data.rank || '',
+        level: data.level || 0,
+        crimesTotal,
+        networth: data.personalstats?.networth || 0,
+        fetchedAt: nowTs()
+      };
+      profile.estimate = estimateStats(profile.rank, profile.level, profile.crimesTotal, profile.networth);
+      STATE.profileCache[memberId] = profile;
+      return profile;
+    } catch (err) {
+      addLog(`Profile ${memberId}: ${err.message || err}`);
+      return null;
+    }
+  }
+
+  async function scanMemberStats() {
+    if (STATE.scanning) { STATE.scanning = false; return; } // cancel
+    const ids = STATE.enemyMembers.map(m => m.id).filter(Boolean);
+    if (!ids.length) { addLog('No members to scan'); return; }
+    if (!STATE.apiKey) { addLog('No API key for stat scan'); return; }
+
+    // Skip members already cached
+    const toScan = ids.filter(id => {
+      const c = STATE.profileCache[id];
+      return !c || (nowTs() - c.fetchedAt) >= PROFILE_CACHE_TTL;
+    });
+
+    STATE.scanning = true;
+    STATE.scanProgress = 0;
+    STATE.scanTotal = toScan.length;
+    addLog(`Scanning stats for ${toScan.length} members (${ids.length - toScan.length} cached)...`);
+    renderPanel();
+
+    for (let i = 0; i < toScan.length; i++) {
+      if (!STATE.scanning) break;
+      STATE.scanProgress = i + 1;
+      await fetchMemberProfile(toScan[i]);
+      if (i < toScan.length - 1) await sleep(SCAN_API_GAP_MS);
+      // Update display every 5 members
+      if ((i + 1) % 5 === 0 || i === toScan.length - 1) renderPanel();
+    }
+
+    STATE.scanning = false;
+    saveProfileCache();
+    addLog('Stat scan complete');
+    renderPanel();
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   function getManualEnemyFactionId() {
     return getStorage(`${SCRIPT_KEY}_enemy_faction_id`, '');
@@ -1407,13 +1529,17 @@
       const mid = escapeHtml(m.id);
       const mname = escapeHtml(m.name);
       const atkUrl = attackUrl(m.id);
+      const profile = STATE.profileCache[m.id];
+      const est = profile?.estimate;
       return `
         <div style="padding:6px 0;border-top:1px solid #2a2d38;">
           <div class="${cls}">
             <strong>${mname}</strong>
             ${m.level ? ` • Lv ${escapeHtml(m.level)}` : ''}
             ${m.position ? ` • ${escapeHtml(m.position)}` : ''}
+            ${est ? ` <span style="font-size:11px;color:${est.color};font-weight:bold;margin-left:4px;">[${escapeHtml(est.label)}]</span>` : ''}
           </div>
+          ${profile?.rank ? `<div style="font-size:11px;color:#c4a0e8;">${escapeHtml(profile.rank)}</div>` : ''}
           <div style="font-size:12px;color:#bbb;">
             ${m.isOnline ? 'Online now' : `Last action: ${escapeHtml(m.relative || `${m.minutes}m`)}`} • ${escapeHtml(m.locationLabel)}
           </div>
@@ -1565,6 +1691,20 @@
         </div>
       ` : ''}
 
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button id="tpda-war-scan-stats" style="background:${STATE.scanning ? '#d64545' : '#4a3d7a'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
+            ${STATE.scanning ? 'Stop Scan' : 'Scan Stats'}
+          </button>
+          <span style="font-size:11px;color:#bbb;">
+            ${STATE.scanning
+              ? `Scanning... ${STATE.scanProgress}/${STATE.scanTotal}`
+              : `Estimate enemy battle stats via TornPDA algorithm`}
+          </span>
+        </div>
+        ${Object.keys(STATE.profileCache).length > 0 ? `<div style="font-size:11px;color:#888;margin-top:4px;">${Object.keys(STATE.profileCache).length} profiles cached</div>` : ''}
+      </div>
+
       <div style="display:flex;gap:8px;margin-bottom:10px;">
         <button class="tpda-war-collapse-all" style="flex:1;background:#2f3340;color:#bbb;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Collapse All</button>
         <button class="tpda-war-expand-all" style="flex:1;background:#2f3340;color:#bbb;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Expand All</button>
@@ -1597,6 +1737,11 @@
         restartPolling();
       };
     }
+
+    const scanBtn = document.getElementById('tpda-war-scan-stats');
+    if (scanBtn) {
+      scanBtn.onclick = () => scanMemberStats();
+    }
   }
 
   function startPolling() {
@@ -1627,6 +1772,7 @@
 
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
+    STATE.profileCache = loadProfileCache();
 
     ensureStyles();
     createBubble();
