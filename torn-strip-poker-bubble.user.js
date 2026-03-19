@@ -525,8 +525,43 @@
   const NW_TRIGGERS      = [5e6, 5e7, 5e8, 5e9, 5e10];
   const STAT_RANGES      = ['< 2k', '2k - 25k', '20k - 250k', '200k - 2.5M', '2M - 25M', '20M - 250M', '> 200M'];
   const STAT_COLORS      = ['#8dff8d', '#8dff8d', '#bfe89c', '#ffd166', '#ffa94d', '#ff6b6b', '#ff4040'];
-  /* Rough midpoint of each range (used for percentage-based target matching) */
+  /* Rough midpoint of each range (used for display/fallback) */
   const STAT_MIDPOINTS   = [1000, 13500, 135000, 1350000, 13500000, 135000000, 300000000];
+
+  /* Per-rank midpoint estimates (total battle stats) for precise assignment matching.
+     Values are community-sourced approximations of where each rank falls. */
+  const RANK_STAT_MIDPOINTS = {
+    'Absolute beginner': 500,
+    'Beginner': 3500,
+    'Inexperienced': 7500,
+    'Rookie': 17500,
+    'Novice': 37500,
+    'Below average': 62500,
+    'Average': 87500,
+    'Reasonable': 125000,
+    'Above average': 200000,
+    'Competent': 300000,
+    'Highly competent': 425000,
+    'Veteran': 625000,
+    'Distinguished': 875000,
+    'Highly distinguished': 1250000,
+    'Professional': 1750000,
+    'Star': 2500000,
+    'Master': 3500000,
+    'Outstanding': 4500000,
+    'Celebrity': 6250000,
+    'Supreme': 8750000,
+    'Idolized': 12500000,
+    'Champion': 17500000,
+    'Heroic': 25000000,
+    'Legendary': 40000000,
+    'Elite': 75000000,
+    'Invincible': 150000000
+  };
+
+  function rankToMidpoint(rank) {
+    return RANK_STAT_MIDPOINTS[rank] || 0;
+  }
 
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
   const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -535,10 +570,23 @@
   function estimateStats(rank, level, crimesTotal, networth) {
     const rs = RANK_SCORES[rank];
     if (!rs) return null;
-    const ls = LEVEL_TRIGGERS.filter(t => t <= (level || 0)).length;
-    const cs = CRIMES_TRIGGERS.filter(t => t <= (crimesTotal || 0)).length;
-    const ns = NW_TRIGGERS.filter(t => t <= (networth || 0)).length;
-    const idx = Math.max(0, Math.min(STAT_RANGES.length - 1, rs - ls - cs - ns - 1));
+    /* Torn rank is directly determined by total battle stats.
+       Map rank brackets to our 7 display ranges based on
+       community-sourced rank ↔ stat correlations:
+         rs  1      →  < 2k          (Absolute beginner)
+         rs  2-4    →  2k - 25k      (Beginner … Rookie)
+         rs  5-9    →  20k - 250k    (Novice … Above average)
+         rs 10-15   →  200k - 2.5M   (Competent … Professional)
+         rs 16-20   →  2M - 25M      (Star … Supreme)
+         rs 21-24   →  20M - 250M    (Idolized … Legendary)
+         rs 25-26   →  > 200M        (Elite, Invincible)       */
+    const idx = rs <= 1  ? 0
+              : rs <= 4  ? 1
+              : rs <= 9  ? 2
+              : rs <= 15 ? 3
+              : rs <= 20 ? 4
+              : rs <= 24 ? 5
+              :            6;
     return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx };
   }
 

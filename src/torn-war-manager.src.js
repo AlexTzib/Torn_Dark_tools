@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.2.0
+// @version      1.2.1
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -237,7 +237,7 @@
   function enrichWithStats(members) {
     return members.map(m => {
       const p = STATE.profileCache[m.id];
-      return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
+      return { ...m, estimate: p?.estimate || null, midpoint: p ? rankToMidpoint(p.rank) : 0 };
     });
   }
 
