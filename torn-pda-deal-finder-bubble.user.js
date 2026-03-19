@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.4.0
+// @version      2.5.0
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -569,6 +569,16 @@
       }
       .tpda-plush-table tr:hover td { background: rgba(155,89,182,0.08); }
       .tpda-plush-best { color: #8dff8d; font-weight: bold; }
+      .tpda-plush-table a.tpda-price-link {
+        color: inherit;
+        text-decoration: none;
+        border-bottom: 1px dashed rgba(255,255,255,0.2);
+        cursor: pointer;
+      }
+      .tpda-plush-table a.tpda-price-link:hover {
+        border-bottom-color: #9b59b6;
+        color: #d9aaff;
+      }
       .tpda-plush-table .total-row td {
         border-top: 2px solid #9b59b6;
         font-weight: bold;
@@ -845,12 +855,19 @@
       /* Highlight the source that provides the best price */
       const floorIsBest = r.floor && r.best && r.floor === r.best;
       const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
+      const marketUrl = `https://www.torn.com/imarket.php#/p=shop&step=shop&type=&searchname=${encodeURIComponent(r.name)}`;
+
+      const priceLink = (val, cls) => {
+        const text = formatMoney(val);
+        if (!val) return `<td${cls ? ` class="${cls}"` : ''}>${text}</td>`;
+        return `<td${cls ? ` class="${cls}"` : ''}><a class="tpda-price-link" href="${escapeHtml(marketUrl)}" target="_blank" rel="noopener">${text}</a></td>`;
+      };
 
       html += `<tr>`;
       html += `<td>${escapeHtml(r.name)}</td>`;
-      html += `<td${floorIsBest ? ' class="tpda-plush-best"' : ''}>${formatMoney(r.floor)}</td>`;
-      html += `<td${bazaarIsBest ? ' class="tpda-plush-best"' : ''}>${formatMoney(r.bazaar)}</td>`;
-      html += `<td class="tpda-plush-best">${formatMoney(r.best)}</td>`;
+      html += priceLink(r.floor, floorIsBest ? 'tpda-plush-best' : '');
+      html += priceLink(r.bazaar, bazaarIsBest ? 'tpda-plush-best' : '');
+      html += priceLink(r.best, 'tpda-plush-best');
       html += `</tr>`;
     }
 
