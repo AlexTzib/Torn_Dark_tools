@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.5.1
+// @version      2.5.2
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1340,7 +1340,7 @@
       /* Highlight the source that provides the best price */
       const floorIsBest = r.floor && r.best && r.floor === r.best;
       const bazaarIsBest = r.bazaar && r.best && r.bazaar === r.best;
-      const marketUrl = `https://www.torn.com/imarket.php#/p=shop&step=shop&type=&searchname=${encodeURIComponent(r.name)}`;
+      const marketUrl = `https://www.torn.com/page.php?sid=ItemMarket#/market/view=search&itemID=${r.id}`;
 
       const priceLink = (val, cls) => {
         const text = formatMoney(val);
