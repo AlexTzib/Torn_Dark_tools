@@ -121,3 +121,25 @@ const resp = await fetch(url);
 `PDA_httpGet` uses Flutter's native HTTP client, completely bypassing the WebView.
 **Note:** `PDA_httpGet` has a 2-second dedup per URL. Different URLs are fine.
 **Note:** `api.torn.com` requests work with plain `fetch()` in PDA because the WebView is on `torn.com` (same-origin).
+
+---
+
+## [CRITICAL] addEventListener Inside renderPanel() (Event Listener Leak)
+
+**What happens:** `warBody.addEventListener('click', handler)` inside `renderPanel()` adds a NEW listener on every render. After 10 poll cycles, 10 identical handlers fire on each click, causing cascading re-renders and eventual freeze.
+**Why it keeps happening:** Natural instinct to put the handler near the HTML it operates on.
+**Real example (v3.3.0 fix):** War Bubble accumulated N click listeners after N renders; each section toggle fired N re-renders.
+**The rule:** `addEventListener()` must go in `createPanel()` (called once), NEVER in `renderPanel()` (called every poll).
+- `element.onclick = fn` is safe inside `renderPanel()` — it overwrites the previous handler.
+- `element.addEventListener('click', fn)` is NOT safe — it stacks.
+- For dynamically rendered content, use event delegation: attach ONE listener to the stable parent (`#tpda-*-body`) and use `e.target.closest('.class')` to match.
+
+---
+
+## [WARN] tickTimers / setInterval Running When Panel is Hidden
+
+**What happens:** `setInterval(tickTimers, 1000)` runs DOM queries every second even when the panel is collapsed (invisible). Wastes CPU and battery on mobile.
+**Real example (v3.3.0 fix):** War Bubble timer tick ran continuously; fixed by starting interval in `expandPanelNearBubble()` and clearing in `collapseToBubble()`.
+**The rule:** Any `setInterval` that touches the DOM must:
+1. Check `STATE.ui.minimized` at the top of the callback
+2. Be started when the panel opens and cleared when it closes

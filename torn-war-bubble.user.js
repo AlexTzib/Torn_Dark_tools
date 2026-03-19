@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Online Bubble (Location + Timers)
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.2.0
+// @version      3.3.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -364,6 +364,53 @@
 
     document.getElementById('tpda-war-collapse').addEventListener('click', collapseToBubble);
 
+    /* Delegated click handler — attached ONCE here, never inside renderPanel().
+       innerHTML replacement destroys child nodes but #tpda-war-body itself persists,
+       so this single listener handles all clicks on dynamically rendered content. */
+    const warBody = document.getElementById('tpda-war-body');
+    warBody.addEventListener('click', (e) => {
+      const btn = e.target.closest('.tpda-war-copy-btn');
+      if (btn) {
+        const text = btn.dataset.copy || '';
+        if (text) copyToClipboard(text, btn);
+        return;
+      }
+      if (e.target.closest('.tpda-war-collapse-all')) {
+        const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
+        keys.forEach(k => { STATE.collapsed[k] = true; STATE.showAll[k] = false; });
+        saveCollapsedState();
+        renderPanel();
+        return;
+      }
+      if (e.target.closest('.tpda-war-expand-all')) {
+        const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
+        keys.forEach(k => { STATE.collapsed[k] = false; });
+        saveCollapsedState();
+        renderPanel();
+        return;
+      }
+      const showAll = e.target.closest('.tpda-war-show-all');
+      if (showAll) {
+        const key = showAll.dataset.section;
+        if (key) {
+          STATE.showAll[key] = true;
+          renderPanel();
+        }
+        return;
+      }
+      const toggle = e.target.closest('.tpda-war-section-toggle');
+      if (toggle) {
+        const key = toggle.dataset.section;
+        if (key) {
+          const current = (STATE.collapsed[key] !== undefined) ? STATE.collapsed[key] : true;
+          STATE.collapsed[key] = !current;
+          if (STATE.collapsed[key]) STATE.showAll[key] = false;
+          saveCollapsedState();
+          renderPanel();
+        }
+      }
+    });
+
     makeDraggablePanel(panel, document.getElementById(HEADER_ID));
   }
 
@@ -398,9 +445,14 @@
       setPanelPosition(clamped);
     }
 
+    /* Start timer tick only while panel is open */
+    if (!STATE.timerTickId) {
+      STATE.timerTickId = setInterval(tickTimers, 1000);
+    }
+
     detectEnemyFaction();
-    refreshEnemyFactionData().then(renderPanel);
     renderPanel();
+    refreshEnemyFactionData().then(renderPanel);
   }
 
   function collapseToBubble() {
@@ -408,6 +460,12 @@
     const bubble = getBubbleEl();
     const panel = getPanelEl();
     if (!bubble || !panel) return;
+
+    /* Stop timer tick to save CPU while minimized */
+    if (STATE.timerTickId) {
+      clearInterval(STATE.timerTickId);
+      STATE.timerTickId = null;
+    }
 
     panel.style.display = 'none';
     bubble.style.display = 'flex';
@@ -1131,6 +1189,7 @@
   }
 
   function tickTimers() {
+    if (STATE.ui.minimized) return;
     const now = nowUnix();
     document.querySelectorAll('.tpda-war-timer[data-end]').forEach(el => {
       const end = Number(el.dataset.end);
@@ -1219,7 +1278,17 @@
     `;
   }
 
+  /* Debounced render — collapses rapid-fire renderPanel() calls into one frame */
+  let _renderRAF = 0;
   function renderPanel() {
+    if (_renderRAF) return;             // already scheduled
+    _renderRAF = requestAnimationFrame(() => {
+      _renderRAF = 0;
+      _renderPanelNow();
+    });
+  }
+
+  function _renderPanelNow() {
     const body = document.getElementById('tpda-war-body');
     if (!body) return;
 
@@ -1353,60 +1422,6 @@ ${STATE._logs.map(l => escapeHtml(l)).join('\n')}
         savePollMs(ms);
         restartPolling();
       };
-    }
-
-    // Delegated click handler for copy buttons, section toggles, show-all, collapse/expand all
-    const warBody = document.getElementById('tpda-war-body');
-    if (warBody) {
-      warBody.addEventListener('click', (e) => {
-        const btn = e.target.closest('.tpda-war-copy-btn');
-        if (btn) {
-          const text = btn.dataset.copy || '';
-          if (text) copyToClipboard(text, btn);
-          return;
-        }
-        if (e.target.closest('.tpda-war-collapse-all')) {
-          const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
-          keys.forEach(k => { STATE.collapsed[k] = true; STATE.showAll[k] = false; });
-          saveCollapsedState();
-          renderPanel();
-          return;
-        }
-        if (e.target.closest('.tpda-war-expand-all')) {
-          const keys = ['onlineTorn','onlineAway','recentTorn','recentAway','hospital','jail','shortOffline','longOffline'];
-          keys.forEach(k => { STATE.collapsed[k] = false; });
-          saveCollapsedState();
-          renderPanel();
-          return;
-        }
-        const showAll = e.target.closest('.tpda-war-show-all');
-        if (showAll) {
-          const key = showAll.dataset.section;
-          if (key) {
-            STATE.showAll[key] = true;
-            renderPanel();
-          }
-          return;
-        }
-        const toggle = e.target.closest('.tpda-war-section-toggle');
-        if (toggle) {
-          const key = toggle.dataset.section;
-          if (key) {
-            /* Treat undefined (fresh/missing key) as true (collapsed) before toggling */
-            const current = (STATE.collapsed[key] !== undefined) ? STATE.collapsed[key] : true;
-            STATE.collapsed[key] = !current;
-            /* Reset show-all when collapsing, so next expand starts capped again */
-            if (STATE.collapsed[key]) STATE.showAll[key] = false;
-            saveCollapsedState();
-            renderPanel();
-          }
-        }
-      });
-    }
-
-    // Start live timer ticking for hospital/jail/flight seconds
-    if (!STATE.timerTickId) {
-      STATE.timerTickId = setInterval(tickTimers, 1000);
     }
 
     const logToggle = document.getElementById('tpda-war-log-toggle');

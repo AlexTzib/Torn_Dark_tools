@@ -37,7 +37,7 @@ Torn_Dark_tools/
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~794 lines)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
-├── torn-war-bubble.user.js                ← War Bubble (~1525 lines)
+├── torn-war-bubble.user.js                ← War Bubble (~1540 lines)
 ├── torn-war-bubble.md                     ← War Bubble documentation
 ├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~950 lines)
 └── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
@@ -382,6 +382,12 @@ Every script has:
 - **Member cap per section:** `SECTION_MEMBER_CAP = 15` — sections render at most 15 members by default with a "Show all X members (+N more)" link. Prevents PDA freezing on factions with 100+ members (each member = 3 buttons + ~400 bytes HTML).
 - **`STATE.showAll`:** Tracks which sections the user has expanded beyond the cap. Resets when the section is collapsed.
 - **Collapse All / Expand All buttons:** Two buttons above the member sections for quick bulk toggle. Collapse All also resets showAll state.
+
+**v3.3.0 changes (performance):**
+- **Event listener leak fix:** Moved the delegated `addEventListener('click', ...)` from `renderPanel()` to `createPanel()` — attached ONCE instead of stacking on every poll cycle. Previous code accumulated N listeners after N renders; each click fired all N handlers causing cascading re-renders.
+- **Timer lifecycle management:** `tickTimers()` now skips DOM queries when panel is minimized. Timer `setInterval` starts in `expandPanelNearBubble()` and clears in `collapseToBubble()`, saving CPU while the bubble is collapsed.
+- **Render debounce:** `renderPanel()` now uses `requestAnimationFrame` to collapse rapid-fire calls into a single frame. Prevents stacked renders from rapid clicks or poll-then-UI sequences.
+- **Double-render fix:** `expandPanelNearBubble()` no longer fires two synchronous renders; it renders stale data immediately, then updates when the API fetch completes.
 
 **Key functions:**
 - `refreshEnemyFactionData()` — Fetches `api.torn.com/faction/{id}?selections=basic`
