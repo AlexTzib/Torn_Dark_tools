@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA - War Manager Bubble
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.0.0
+// @version      1.1.0
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -46,6 +46,7 @@
     pollMs: loadPollMs(),
     pollTimerId: null,
     thresholdPct: loadThresholdPct(),
+    selectedMemberId: null, // currently selected own-faction member for target list
     assignments: [],       // { own, enemy } pairs
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
     scanning: false,
@@ -1094,10 +1095,12 @@
     if (STATE.scanning) { STATE.scanning = false; return; }
     if (!STATE.apiKey) { addLog('No API key for scan'); return; }
 
-    const allIds = [
-      ...STATE.ownMembers.map(m => m.id),
-      ...STATE.enemyMembers.map(m => m.id)
-    ].filter(Boolean);
+    // Only scan online own members (skip offline to save API calls) + all enemies
+    const ownOnlineIds = STATE.ownMembers
+      .filter(m => m.isOnline)
+      .map(m => m.id);
+    const enemyIds = STATE.enemyMembers.map(m => m.id);
+    const allIds = [...ownOnlineIds, ...enemyIds].filter(Boolean);
 
     const toScan = allIds.filter(id => {
       const c = STATE.profileCache[id];
@@ -1137,30 +1140,15 @@
 
   /* ── Target assignment algorithm ───────────────────────────── */
 
-  function computeAssignments() {
-    const pct = STATE.thresholdPct / 100;
+  function enrichWithStats(members) {
+    return members.map(m => {
+      const p = STATE.profileCache[m.id];
+      return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
+    });
+  }
 
-    // Get online/available own members with stat data
-    const ownAvailable = STATE.ownMembers
-      .filter(m => m.isOnline && m.locationBucket === 'torn')
-      .map(m => {
-        const p = STATE.profileCache[m.id];
-        return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
-      })
-      .filter(m => m.estimate)
-      .sort((a, b) => b.midpoint - a.midpoint); // strongest first
-
-    // Get targetable enemies (not in jail, preferring online/torn/hospital)
-    const enemies = STATE.enemyMembers
-      .filter(m => m.locationBucket !== 'jail')
-      .map(m => {
-        const p = STATE.profileCache[m.id];
-        return { ...m, estimate: p?.estimate || null, midpoint: p?.estimate ? STAT_MIDPOINTS[p.estimate.idx] : 0 };
-      })
-      .filter(m => m.estimate);
-
-    // Sort enemies: online in Torn first, then hospital (soon out), then others
-    enemies.sort((a, b) => {
+  function sortEnemiesByPriority(enemies) {
+    return enemies.sort((a, b) => {
       const prio = (m) => {
         if (m.isOnline && m.locationBucket === 'torn') return 0;
         if (m.locationBucket === 'hospital' && m.remainingSec != null && m.remainingSec < 600) return 1;
@@ -1171,18 +1159,34 @@
       };
       return prio(a) - prio(b) || a.midpoint - b.midpoint;
     });
+  }
+
+  function getTargetsForMember(ownMember, enemies, pct) {
+    const maxStats = ownMember.midpoint * pct;
+    return enemies.filter(e => e.estimate && e.midpoint <= maxStats);
+  }
+
+  function computeAssignments() {
+    const pct = STATE.thresholdPct / 100;
+
+    const ownAvailable = enrichWithStats(
+      STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn')
+    ).filter(m => m.estimate)
+     .sort((a, b) => b.midpoint - a.midpoint);
+
+    const enemies = sortEnemiesByPriority(
+      enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
+        .filter(m => m.estimate)
+    );
 
     const assigned = new Set();
     const assignments = [];
 
     for (const own of ownAvailable) {
-      const maxTargetStats = own.midpoint * pct;
       const targets = enemies.filter(e =>
-        !assigned.has(e.id) && e.midpoint <= maxTargetStats
+        !assigned.has(e.id) && e.midpoint <= own.midpoint * pct
       );
-
       if (targets.length > 0) {
-        // Pick the strongest target within range
         const target = targets[targets.length - 1];
         assigned.add(target.id);
         assignments.push({ own, enemy: target });
@@ -1190,7 +1194,24 @@
     }
 
     STATE.assignments = assignments;
-    addLog(`Assignments computed: ${assignments.length} pairs (${ownAvailable.length} available, threshold ${STATE.thresholdPct}%)`);
+    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} available, ${STATE.thresholdPct}%)`);
+  }
+
+  function getSelectedMemberTargets() {
+    if (!STATE.selectedMemberId) return [];
+    const pct = STATE.thresholdPct / 100;
+
+    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
+    if (!own) return [];
+    const ownEnriched = enrichWithStats([own])[0];
+    if (!ownEnriched.estimate) return [];
+
+    const enemies = sortEnemiesByPriority(
+      enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
+        .filter(m => m.estimate)
+    );
+
+    return getTargetsForMember(ownEnriched, enemies, pct);
   }
 
   /* ── Message generation ────────────────────────────────────── */
@@ -1233,6 +1254,22 @@
       }
       return `${own.name} \u2192 ${enemy.name}${est}${hospNote} ${profileUrl(enemy.id)}`;
     }).join('\n');
+  }
+
+  function generateSelectedTargetMessages() {
+    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
+    if (!own) return 'No member selected.';
+    const targets = getSelectedMemberTargets();
+    if (!targets.length) return 'No suitable targets found.';
+
+    return targets.map(e => {
+      const est = e.estimate ? ` [${e.estimate.label}]` : '';
+      let hospNote = '';
+      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
+        hospNote = ` (hospital, out in ${formatSeconds(e.remainingSec)})`;
+      }
+      return `${own.name} get ${e.name}${est}${hospNote}\n  ${profileUrl(e.id)}`;
+    }).join('\n\n');
   }
 
   /* ── UI ─────────────────────────────────────────────────────── */
@@ -1390,13 +1427,14 @@
       ${renderSettingsCard()}
       ${renderActionBar()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
+      ${renderMemberSelector(ownOnline)}
+      ${renderSelectedTargetList()}
       ${renderAssignmentsCard()}
-      ${renderFactionList('Own Faction \u2014 Online in Torn', ownOnline, 'mgr-own')}
       ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy')}
       ${renderLogCard()}
     `;
 
-    attachPanelHandlers();
+    attachPanelHandlers(ownOnline);
   }
 
   function renderWarStatusCard(ownOnline, enemyOnline, enemyHospital) {
@@ -1467,6 +1505,89 @@
       </div>`;
   }
 
+  function renderMemberSelector(ownOnline) {
+    const selected = STATE.selectedMemberId;
+    const enriched = enrichWithStats(ownOnline);
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
+        <div style="font-weight:bold;margin-bottom:6px;">Pick Attacker (${ownOnline.length} online)</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Select a faction member to build their personal target list</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${enriched.map(m => {
+            const est = m.estimate;
+            const isActive = m.id === selected;
+            const bg = isActive ? '#e67e22' : '#2f3340';
+            const col = isActive ? '#fff' : '#ccc';
+            const badge = est ? ` [${escapeHtml(est.label)}]` : '';
+            return `<button class="tpda-mgr-pick-member" data-mid="${escapeHtml(m.id)}"
+              style="background:${bg};color:${col};border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap;">
+              ${escapeHtml(m.name)}${badge}
+            </button>`;
+          }).join('')}
+          ${!ownOnline.length ? '<span class="mgr-muted">No online members yet. Refresh data first.</span>' : ''}
+        </div>
+      </div>`;
+  }
+
+  function renderSelectedTargetList() {
+    if (!STATE.selectedMemberId) return '';
+    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
+    if (!own) return '';
+    const ownEnriched = enrichWithStats([own])[0];
+    const targets = getSelectedMemberTargets();
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #e67e22;border-radius:10px;background:#1f1a12;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-weight:bold;color:#e67e22;">
+            Targets for ${escapeHtml(own.name)}
+            ${ownEnriched.estimate ? ` <span style="color:${ownEnriched.estimate.color};">[${escapeHtml(ownEnriched.estimate.label)}]</span>` : ''}
+            <span style="color:#888;font-weight:normal;font-size:11px;"> @ ${STATE.thresholdPct}%</span>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateSelectedTargetMessages())}"
+                    style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Copy List
+            </button>
+            <button id="tpda-mgr-deselect"
+                    style="font-size:11px;background:#444;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
+              Clear
+            </button>
+          </div>
+        </div>
+        ${!targets.length ? '<div class="mgr-muted">No suitable targets at current threshold. Try increasing the stat % or scan more stats.</div>' : ''}
+        ${targets.map(e => {
+          const est = e.estimate;
+          const enemyStatus = e.isOnline
+            ? '<span style="color:#4caf50;">Online</span>'
+            : `<span style="color:#888;">${escapeHtml(e.relative)}</span>`;
+          let hospNote = '';
+          if (e.locationBucket === 'hospital' && e.remainingSec != null) {
+            hospNote = `<div style="font-size:11px;color:#ffd166;">\u23F0 Out of hospital in ${formatSeconds(e.remainingSec)}</div>`;
+          }
+          return `
+            <div style="padding:6px 0;border-top:1px solid #3a3020;">
+              <div>
+                <strong class="mgr-enemy">${escapeHtml(e.name)}</strong>
+                ${e.level ? ` Lv${escapeHtml(e.level)}` : ''}
+                ${est ? ` <span style="color:${est.color};font-weight:bold;font-size:11px;">[${escapeHtml(est.label)}]</span>` : ''}
+              </div>
+              <div style="font-size:11px;color:#bbb;">${enemyStatus} \u2022 ${escapeHtml(e.locationLabel)}</div>
+              ${hospNote}
+              <div style="margin-top:3px;display:flex;gap:6px;">
+                <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
+                   style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Attack</a>
+                <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
+                   style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Profile</a>
+                <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(`${own.name} get ${e.name} ${est ? '[' + est.label + ']' : ''} ${profileUrl(e.id)}${e.locationBucket === 'hospital' && e.remainingSec != null ? ' (hospital, out in ' + formatSeconds(e.remainingSec) + ')' : ''}`)}"
+                        style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy</button>
+              </div>
+            </div>`;
+        }).join('')}
+        <div style="font-size:11px;color:#888;margin-top:6px;">${targets.length} target${targets.length !== 1 ? 's' : ''} within ${STATE.thresholdPct}% of estimated stats</div>
+      </div>`;
+  }
+
   function renderAssignmentsCard() {
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
@@ -1534,6 +1655,23 @@
 
     const refreshBtn = document.getElementById('tpda-mgr-refresh');
     if (refreshBtn) refreshBtn.onclick = () => refreshAll();
+
+    // Member picker buttons
+    document.querySelectorAll('.tpda-mgr-pick-member').forEach(btn => {
+      btn.onclick = () => {
+        const mid = btn.dataset.mid;
+        STATE.selectedMemberId = (STATE.selectedMemberId === mid) ? null : mid;
+        renderPanel();
+      };
+    });
+
+    const deselectBtn = document.getElementById('tpda-mgr-deselect');
+    if (deselectBtn) {
+      deselectBtn.onclick = () => {
+        STATE.selectedMemberId = null;
+        renderPanel();
+      };
+    }
   }
 
   function renderAssignments() {
