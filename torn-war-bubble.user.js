@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Bubble
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
-// @version      3.5.0
+// @version      3.6.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*

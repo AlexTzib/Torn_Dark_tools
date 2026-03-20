@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
-// @version      1.0.0
+// @version      1.1.0
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*

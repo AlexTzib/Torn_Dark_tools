@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
-// @version      2.6.0
+// @version      2.7.0
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*

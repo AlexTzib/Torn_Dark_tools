@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Market Sniper
 // @namespace    alex.torn.pda.marketsniper.bubble
-// @version      1.0.0
+// @version      1.1.0
 // @description  Market profit finder — scans item market and bazaar for underpriced deals. Shows buy/sell prices, estimated profit, ROI%, and alerts on high-value opportunities.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*

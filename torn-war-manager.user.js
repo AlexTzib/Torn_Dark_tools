@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.3.2
+// @version      1.4.0
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*

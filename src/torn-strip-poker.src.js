@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Strip Poker
 // @namespace    alex.torn.pda.strippoker.bubble
-// @version      2.2.0
+// @version      2.3.0
 // @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*

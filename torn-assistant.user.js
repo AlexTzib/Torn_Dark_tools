@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - AI Advisor
 // @namespace    alex.torn.pda.safe.ai.bubble
-// @version      3.2.0
+// @version      3.3.0
 // @description  Safe local Torn PDA advisor with draggable chat-head bubble and expandable panel
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
