@@ -296,7 +296,7 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval`, `_collapsed` |
 | Strip Poker | `tpda_strip_poker_v1` | `_bubble_pos`, `_panel_pos` |
 | War Manager | `tpda_war_manager_v1` | `_bubble_pos`, `_panel_pos`, `_threshold_pct`, `_poll_ms`, `_enemy_faction_id` |
-| Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters` |
+| Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters`, `_bounty_cache`, `_status_cache` |
 | Market Sniper | `tpda_market_sniper_v1` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_watchlist`, `_prices`, `_dismissed`, `_filters` |
 
 ### Debug Log Pattern
@@ -516,11 +516,13 @@ Every script has:
 - **56 px bubble** with orange gradient, labeled "BTY"
 - **380 px panel** — filter controls at top, scrollable bounty list below
 - **z-index base 999950** — below all other scripts
-- **Two-phase data fetch:** First fetches bounty list from `v2/torn/?selections=bounties` (v2 API — the `bounties` selection was migrated to v2-only in March 2025), then enriches each target with `user/{id}?selections=profile` to get their status
+- **Two-phase data fetch:** First fetches bounty list from `v2/torn/?selections=bounties`, then enriches each target with `v2/user/{id}?selections=profile` to get their status. Both use v2 API.
 
 **Key functions:**
-- `fetchBounties()` — Fetches `v2/torn/?selections=bounties` (v2 returns an **array**, v1 returned an object keyed by ID), parses bounty objects, then calls `enrichBountyTargets()`
-- `enrichBountyTargets()` — For up to 30 unique targets, fetches `user/{id}?selections=profile` with 350ms gaps. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Results cached in `STATE.statusCache` (1-minute TTL)
+- `fetchBounties()` — Fetches `v2/torn/?selections=bounties` (v2 returns an **array**, v1 returned an object keyed by ID), parses bounty objects, saves to localStorage, then calls `enrichBountyTargets()`
+- `enrichBountyTargets()` — For up to 30 unique targets, fetches `v2/user/{id}?selections=profile` with 350ms gaps. Handles both v2 nested (`data.profile`) and flat response formats. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Results cached in localStorage (10-minute TTL) and memory (1-minute TTL).
+- `loadCachedBounties()` / `saveCachedBounties()` — Persist bounty list to localStorage
+- `loadCachedStatuses()` / `saveCachedStatuses()` — Persist target status cache to localStorage
 - `applyEnrichment()` — Merges status cache into bounty list, producing `STATE.enriched[]`
 - `filteredBounties()` — Applies all active filters to `STATE.enriched[]`
 - `renderPanel()` — Renders filter controls (state checkboxes, max level, min reward, hospital-soon filter), status bar, bounty rows with state icon, name (profile link), level, reward, timer, and Attack button
@@ -539,15 +541,17 @@ Every script has:
 
 **Data flow:**
 1. API key resolved (PDA > shared manual > intercepted)
-2. On panel open (or Refresh): fetch bounty list from `v2/torn/?selections=bounties` (2-min cache)
-3. For each unique target (up to 30), fetch `user/{id}?selections=profile` (1-min cache, 350ms gaps)
-4. `inferLocationState()` + `extractTimerInfo()` determine state/timer from profile response
-5. `filteredBounties()` applies user filters, `renderPanel()` displays results
+2. On init: load cached bounties + statuses from localStorage
+3. On panel open: render cached data immediately (no API calls)
+4. On Refresh: fetch bounty list from `v2/torn/?selections=bounties`, save to localStorage
+5. For each unique target (up to 30), fetch `v2/user/{id}?selections=profile` (1-min memory TTL, 10-min localStorage TTL, 350ms gaps)
+6. `inferLocationState()` + `extractTimerInfo()` determine state/timer from profile response
+7. `filteredBounties()` applies user filters, `renderPanel()` displays results
 
 **API usage:**
 - 1 call for bounty list + up to 30 calls for target enrichment per refresh
 - 350ms gap between enrichment calls (~170 calls/min if only this script)
-- Caching prevents redundant calls (2-min bounty list, 1-min per target)
+- localStorage caching (10-min TTL) prevents redundant calls across panel open/close and page navigation
 
 ### Market Sniper (`torn-market-sniper-bubble.user.js`)
 
@@ -561,7 +565,7 @@ Every script has:
 - **Uses shared `calcDealProfit()` and `tpdaNotify()`** from `common.js`
 
 **Key constants:**
-- `DEFAULT_WATCHLIST` — 8 high-liquidity items: Xanax (206), Vicodin (196), FHC (367), Erotic DVD (366), Donator Pack (370), Energy Drink (283), Morphine (197), SED (398)
+- `DEFAULT_WATCHLIST` — 50 popular tradeable items across 7 categories: Drugs (11), Plushies (13), Flowers (11), Boosters/Supply Packs (5), Medical (3), Temp Weapons & Other (7). All IDs verified against tornstats. User can add/remove items and reset to defaults.
 - `API_DELAY_MS = 300` — gap between items during scan
 - `CACHE_TTL_MS = 5 * 60 * 1000` — 5-minute price cache
 - `DISMISS_TTL_MS = 60 * 60 * 1000` — 1-hour dismiss expiry

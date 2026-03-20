@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
-// @version      1.1.0
+// @version      1.2.0
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -22,10 +22,13 @@
   const HEADER_ID = 'tpda-bounty-header';
   const BUBBLE_SIZE = 56;
 
-  const CACHE_TTL_MS = 2 * 60 * 1000; /* 2-minute cache for bounty list */
-  const STATUS_CACHE_TTL_MS = 60 * 1000; /* 1-minute cache for individual target status */
+  const STATUS_CACHE_TTL_MS = 60 * 1000; /* 1-minute in-memory cache (skips already-fresh targets) */
   const STATUS_FETCH_GAP_MS = 350; /* gap between status lookups (~170/min, shared with other scripts) */
   const MAX_STATUS_LOOKUPS = 30; /* max targets to enrich per refresh (controls API usage) */
+
+  const BOUNTY_CACHE_KEY = `${SCRIPT_KEY}_bounty_cache`;
+  const STATUS_CACHE_KEY = `${SCRIPT_KEY}_status_cache`;
+  const PERSIST_TTL_MS = 10 * 60 * 1000; /* 10-minute localStorage persistence */
 
   const FILTER_STORAGE_KEY = `${SCRIPT_KEY}_filters`;
 
@@ -1141,12 +1144,49 @@
 
 
 
+  /* ── localStorage cache for bounties & target statuses ──── */
+
+  function loadCachedBounties() {
+    const c = getStorage(BOUNTY_CACHE_KEY, null);
+    if (c && c.ts && Date.now() - c.ts < PERSIST_TTL_MS) {
+      STATE.bounties = c.list || [];
+      STATE.lastFetchTs = c.ts;
+      return true;
+    }
+    return false;
+  }
+
+  function saveCachedBounties() {
+    setStorage(BOUNTY_CACHE_KEY, { list: STATE.bounties, ts: STATE.lastFetchTs });
+  }
+
+  function loadCachedStatuses() {
+    const c = getStorage(STATUS_CACHE_KEY, null);
+    if (!c || typeof c !== 'object') return;
+    const now = Date.now();
+    for (const [tid, e] of Object.entries(c)) {
+      if (e && e.fetchedAt && now - e.fetchedAt < PERSIST_TTL_MS) {
+        STATE.statusCache[tid] = e;
+      }
+    }
+  }
+
+  function saveCachedStatuses() {
+    const now = Date.now();
+    const out = {};
+    for (const [tid, e] of Object.entries(STATE.statusCache)) {
+      if (e && e.fetchedAt && now - e.fetchedAt < PERSIST_TTL_MS) {
+        out[tid] = e;
+      }
+    }
+    setStorage(STATUS_CACHE_KEY, out);
+  }
+
+
   /* ── Panel expand/collapse hooks ─────────────────────────── */
   function onPanelExpand() {
+    applyEnrichment();
     renderPanel();
-    if (!STATE.fetching && (!STATE.lastFetchTs || Date.now() - STATE.lastFetchTs > CACHE_TTL_MS)) {
-      fetchBounties();
-    }
   }
   function onPanelCollapse() {}
 
@@ -1227,6 +1267,7 @@
 
       STATE.bounties = list;
       STATE.lastFetchTs = Date.now();
+      saveCachedBounties();
       addLog(`Fetched ${list.length} bounties`);
 
       /* Enrich targets with status */
@@ -1276,7 +1317,7 @@
       STATE.enrichProgress = i + 1;
 
       try {
-        const url = `https://api.torn.com/user/${tid}?selections=profile&key=${STATE.apiKey}&_tpda=1`;
+        const url = `https://api.torn.com/v2/user/${tid}?selections=profile&key=${STATE.apiKey}&_tpda=1`;
         let data;
         if (typeof PDA_httpGet === 'function') {
           const resp = await PDA_httpGet(url, {});
@@ -1286,17 +1327,23 @@
           data = await r.json();
         }
 
-        if (data && !data.error) {
-          const loc = inferLocationState(data);
-          const timer = extractTimerInfo(data, loc.bucket);
+        if (data?.error) {
+          addLog(`API error for #${tid}: ${data.error.error || data.error.code}`);
+        } else if (data) {
+          const p = data.profile || data;
+          const merged = { ...p };
+          if (!merged.status && data.status) merged.status = data.status;
+
+          const loc = inferLocationState(merged);
+          const timer = extractTimerInfo(merged, loc.bucket);
           STATE.statusCache[tid] = {
             state: loc.bucket,
             label: loc.label,
-            level: data.level || 0,
-            name: data.name || '',
+            level: merged.level || 0,
+            name: merged.name || '',
             remainingSec: timer.remainingSec,
             timerSource: timer.source,
-            lastAction: data.last_action,
+            lastAction: merged.last_action || data.last_action,
             fetchedAt: Date.now()
           };
         }
@@ -1314,6 +1361,7 @@
     }
 
     STATE.enriching = false;
+    saveCachedStatuses();
     applyEnrichment();
     addLog(`Enriched ${batch.length} targets`);
     renderPanel();
@@ -1711,6 +1759,12 @@
 
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
+
+    loadCachedStatuses();
+    if (loadCachedBounties()) {
+      applyEnrichment();
+      addLog(`Loaded ${STATE.bounties.length} cached bounties`);
+    }
 
     ensureStyles();
     createBubble();
