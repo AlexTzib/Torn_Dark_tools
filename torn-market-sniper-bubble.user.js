@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Market Sniper
 // @namespace    alex.torn.pda.marketsniper.bubble
-// @version      1.1.0
+// @version      1.2.0
 // @description  Market profit finder — scans item market and bazaar for underpriced deals. Shows buy/sell prices, estimated profit, ROI%, and alerts on high-value opportunities.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -98,6 +98,7 @@
       minRoi: 0,          /* 0 = no limit */
       profitableOnly: true,
       hideDismissed: true,
+      considerQty: false,  /* when true, sum profit across all listings below sell price */
       sortBy: 'netProfit', /* 'netProfit' | 'roiPct' | 'discoveredAt' */
       sortAsc: false,      /* descending by default — best deals first */
       taxPct: 0,           /* configurable tax estimate (Torn has no explicit tax, but allows conservative estimates) */
@@ -1285,7 +1286,8 @@
       floor: listings.length ? listings[0].price : null,
       avg: avgPrice,
       count: listings.length,
-      itemName
+      itemName,
+      listings: listings.slice(0, 50).map(l => ({ price: l.price, qty: l.quantity || 1 }))
     };
   }
 
@@ -1302,10 +1304,13 @@
       const bazaarSellerId = top.player_id ?? null;
       const bazaarAvg = data.bazaar_average ?? null;
       addLog(`[W3B] bazaar ${itemId}: floor=${bazaarFloor ?? 'n/a'} avg=${bazaarAvg ?? 'n/a'} (${listings.length})`);
-      return { bazaarFloor, bazaarAvg, bazaarCount: listings.length, bazaarSellerId };
+      return {
+        bazaarFloor, bazaarAvg, bazaarCount: listings.length, bazaarSellerId,
+        bazaarListings: listings.slice(0, 50).map(l => ({ price: l.price, qty: l.quantity || 1 }))
+      };
     } catch (err) {
       addLog(`[W3B] bazaar ${itemId}: ${err.message}`);
-      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0, bazaarSellerId: null };
+      return { bazaarFloor: null, bazaarAvg: null, bazaarCount: 0, bazaarSellerId: null, bazaarListings: [] };
     }
   }
 
@@ -1346,10 +1351,12 @@
           floor: market.floor,
           avg: market.avg,
           listingCount: market.count,
+          listings: market.listings || [],
           bazaarFloor: bazaar.bazaarFloor,
           bazaarAvg: bazaar.bazaarAvg,
           bazaarCount: bazaar.bazaarCount,
           bazaarSellerId: bazaar.bazaarSellerId,
+          bazaarListings: bazaar.bazaarListings || [],
           fetchedAt: nowTs()
         };
 
@@ -1396,7 +1403,7 @@
       const profit = calcDealProfit(buyPrice, sellPrice, s.taxPct, 0);
       if (!profit) continue;
 
-      deals.push({
+      const deal = {
         itemId: item.id,
         itemName: item.name,
         buyPrice: profit.buyPrice,
@@ -1409,12 +1416,47 @@
         bazaarFloor: p.bazaarFloor,
         bazaarSellerId: p.bazaarSellerId,
         listingCount: (p.listingCount || 0) + (p.bazaarCount || 0),
-        discoveredAt: p.fetchedAt || nowTs()
-      });
+        discoveredAt: p.fetchedAt || nowTs(),
+        totalQty: 0,
+        totalCost: 0,
+        totalProfit: 0
+      };
+
+      if (s.considerQty && sellPrice > 0) {
+        const merged = mergeListingsBelowSell(p.listings || [], p.bazaarListings || [], sellPrice, s.taxPct);
+        deal.totalQty = merged.totalQty;
+        deal.totalCost = merged.totalCost;
+        deal.totalProfit = merged.totalProfit;
+      }
+
+      deals.push(deal);
     }
 
     STATE.deals = deals;
     STATE.dealCount = deals.filter(d => d.netProfit > 0).length;
+  }
+
+  function mergeListingsBelowSell(marketListings, bazaarListings, sellPrice, taxPct) {
+    const all = [];
+    for (const l of marketListings) {
+      if (l.price > 0 && l.price < sellPrice) all.push(l);
+    }
+    for (const l of bazaarListings) {
+      if (l.price > 0 && l.price < sellPrice) all.push(l);
+    }
+    all.sort((a, b) => a.price - b.price);
+
+    let totalQty = 0, totalCost = 0, totalProfit = 0;
+    const taxMul = (100 - (Number(taxPct) || 0)) / 100;
+    for (const l of all) {
+      const qty = l.qty || 1;
+      const cost = l.price * qty;
+      const revenue = Math.round(sellPrice * taxMul) * qty;
+      totalQty += qty;
+      totalCost += cost;
+      totalProfit += revenue - cost;
+    }
+    return { totalQty, totalCost, totalProfit };
   }
 
 
@@ -1788,6 +1830,7 @@
     h += `<div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px;">`;
     h += settingCheckbox('profitableOnly', 'Profitable only', s.profitableOnly, '#4caf50');
     h += settingCheckbox('hideDismissed', 'Hide dismissed', s.hideDismissed, '#bbb');
+    h += settingCheckbox('considerQty', 'Consider quantities', s.considerQty, '#42a5f5');
     h += `</div>`;
 
     h += `<div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11px;">`;
@@ -1898,6 +1941,16 @@
             h += `<span style="color:#888;font-size:10px;">Tax: ${formatMoney(d.taxAmount)}</span>`;
           }
           h += `</div>`;
+
+          /* Quantity-aware totals (when considerQty is on) */
+          if (s.considerQty && d.totalQty > 0) {
+            h += `<div style="display:flex;gap:12px;align-items:center;margin-top:2px;font-size:11px;border-top:1px dashed #2a2d38;padding-top:3px;">`;
+            h += `<span style="color:#42a5f5;">${d.totalQty}x available</span>`;
+            h += `<span style="color:#bbb;">Cost: ${formatMoney(d.totalCost)}</span>`;
+            const totClass = d.totalProfit > 0 ? 'tpda-sniper-profit' : 'tpda-sniper-loss';
+            h += `<span class="${totClass}">Total: ${formatMoney(d.totalProfit)}</span>`;
+            h += `</div>`;
+          }
 
           h += `</div>`;
         }
