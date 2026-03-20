@@ -27,16 +27,64 @@
   const DISMISS_TTL_MS = 60 * 60 * 1000; /* 1-hour dismiss expiry */
   const NOTIFY_DEDUP_MS = 5 * 60 * 1000; /* 5-minute notification dedup per item */
 
-  /* ── Default watchlist — high-liquidity fast-flip items ───── */
+  /* ── Default watchlist — 50+ popular tradeable items ─────── */
   const DEFAULT_WATCHLIST = [
+    /* ── Drugs (11) ─────────────────────────────────────────── */
     { id: 206, name: 'Xanax' },
-    { id: 196, name: 'Vicodin' },
-    { id: 367, name: 'Feathery Hotel Coupon' },
+    { id: 197, name: 'Ecstasy' },
+    { id: 205, name: 'Vicodin' },
+    { id: 196, name: 'Cannabis' },
+    { id: 198, name: 'Ketamine' },
+    { id: 199, name: 'LSD' },
+    { id: 200, name: 'Opium' },
+    { id: 201, name: 'PCP' },
+    { id: 203, name: 'Shrooms' },
+    { id: 204, name: 'Speed' },
+    { id: 870, name: 'Love Juice' },
+    /* ── Plushies (13) ──────────────────────────────────────── */
+    { id: 186, name: 'Sheep Plushie' },
+    { id: 187, name: 'Teddy Bear Plushie' },
+    { id: 215, name: 'Kitten Plushie' },
+    { id: 258, name: 'Jaguar Plushie' },
+    { id: 261, name: 'Wolverine Plushie' },
+    { id: 266, name: 'Nessie Plushie' },
+    { id: 268, name: 'Red Fox Plushie' },
+    { id: 269, name: 'Monkey Plushie' },
+    { id: 273, name: 'Chamois Plushie' },
+    { id: 274, name: 'Panda Plushie' },
+    { id: 281, name: 'Lion Plushie' },
+    { id: 384, name: 'Camel Plushie' },
+    { id: 618, name: 'Stingray Plushie' },
+    /* ── Flowers (11) ───────────────────────────────────────── */
+    { id: 260, name: 'Dahlia' },
+    { id: 263, name: 'Crocus' },
+    { id: 264, name: 'Orchid' },
+    { id: 267, name: 'Heather' },
+    { id: 271, name: 'Ceibo Flower' },
+    { id: 272, name: 'Edelweiss' },
+    { id: 276, name: 'Peony' },
+    { id: 277, name: 'Cherry Blossom' },
+    { id: 282, name: 'African Violet' },
+    { id: 385, name: 'Tribulus Omanense' },
+    { id: 617, name: 'Banana Orchid' },
+    /* ── Boosters & Supply Packs (5) ────────────────────────── */
     { id: 366, name: 'Erotic DVD' },
-    { id: 370, name: 'Donator Pack' },
-    { id: 283, name: 'Energy Drink' },
-    { id: 197, name: 'Morphine' },
-    { id: 398, name: 'Small Explosive Device' },
+    { id: 367, name: 'Feathery Hotel Coupon' },
+    { id: 283, name: 'Donator Pack' },
+    { id: 370, name: 'Drug Pack' },
+    { id: 365, name: 'Box of Medical Supplies' },
+    /* ── Medical (3) ────────────────────────────────────────── */
+    { id: 66, name: 'Morphine' },
+    { id: 67, name: 'First Aid Kit' },
+    { id: 68, name: 'Small First Aid Kit' },
+    /* ── Temporary Weapons & Other Popular (7) ──────────────── */
+    { id: 220, name: 'Grenade' },
+    { id: 222, name: 'Flash Grenade' },
+    { id: 226, name: 'Smoke Grenade' },
+    { id: 229, name: 'Claymore Mine' },
+    { id: 256, name: 'Tear Gas' },
+    { id: 392, name: 'Pepper Spray' },
+    { id: 530, name: 'Can of Munster' },
   ];
 
   const SETTINGS_KEY = `${SCRIPT_KEY}_settings`;
@@ -624,6 +672,15 @@
         }
         return;
       }
+
+      /* Reset watchlist to defaults */
+      if (e.target.closest('.tpda-sniper-wl-reset')) {
+        STATE.watchlist = DEFAULT_WATCHLIST.map(w => ({ ...w }));
+        saveWatchlist();
+        addLog(`Watchlist reset to defaults (${DEFAULT_WATCHLIST.length} items)`);
+        renderPanel();
+        return;
+      }
     });
 
     /* Delegated change handler for settings/filters */
@@ -811,6 +868,9 @@
       h += `<input class="tpda-sniper-wl-id" type="number" placeholder="Item ID" style="width:70px;background:#0f1116;color:#fff;border:1px solid #444;border-radius:4px;padding:4px;font-size:11px;" />`;
       h += `<input class="tpda-sniper-wl-name" type="text" placeholder="Item Name" style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:4px;padding:4px;font-size:11px;" />`;
       h += `<button class="tpda-sniper-wl-add" style="background:#2ecc40;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;">Add</button>`;
+      h += `</div>`;
+      h += `<div style="margin-top:6px;text-align:right;">`;
+      h += `<button class="tpda-sniper-wl-reset" style="background:#555;color:#ffd700;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;">Reset to Defaults</button>`;
       h += `</div>`;
       h += `</div>`;
     }
