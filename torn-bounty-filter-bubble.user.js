@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
-// @version      1.2.0
+// @version      1.3.0
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -61,6 +61,7 @@
       showUnknown: true,    /* Unknown state */
       maxLevel: 0,          /* 0 = no limit */
       minReward: 0,         /* 0 = no limit */
+      maxStatIdx: -1,       /* -1 = no limit; 0-6 maps to STAT_RANGES */
       hideSoon: false,      /* hide hospital targets releasing in < 5 min (too late to hit) */
       soonMinutes: 5,       /* "soon" threshold in minutes */
     };
@@ -1336,11 +1337,15 @@
 
           const loc = inferLocationState(merged);
           const timer = extractTimerInfo(merged, loc.bucket);
+          const rank = merged.rank || data.rank || '';
+          const statEst = estimateStats(rank, merged.level || 0, 0, 0);
           STATE.statusCache[tid] = {
             state: loc.bucket,
             label: loc.label,
             level: merged.level || 0,
             name: merged.name || '',
+            rank: rank,
+            statEstimate: statEst,
             remainingSec: timer.remainingSec,
             timerSource: timer.source,
             lastAction: merged.last_action || data.last_action,
@@ -1376,6 +1381,8 @@
         targetName: status?.name || b.targetName,
         state: status?.state || 'unknown',
         stateLabel: status?.label || 'Unknown',
+        rank: status?.rank || '',
+        statEstimate: status?.statEstimate || null,
         remainingSec: status?.remainingSec || 0,
         lastAction: status?.lastAction || null,
       };
@@ -1400,6 +1407,9 @@
 
       /* Reward filter */
       if (f.minReward > 0 && b.reward < f.minReward) return false;
+
+      /* Estimated stats filter */
+      if (f.maxStatIdx >= 0 && b.statEstimate && b.statEstimate.idx > f.maxStatIdx) return false;
 
       /* "Soon" filter — hide hospital targets releasing in < N min */
       if (f.hideSoon && b.state === 'hospital' && b.remainingSec > 0 && b.remainingSec < f.soonMinutes * 60) return false;
@@ -1624,7 +1634,7 @@
 
       if (el.type === 'checkbox') {
         STATE.filters[fKey] = el.checked;
-      } else if (el.type === 'number') {
+      } else if (el.type === 'number' || el.tagName === 'SELECT') {
         STATE.filters[fKey] = parseInt(el.value) || 0;
       }
       saveFilters();
@@ -1667,6 +1677,17 @@
     h += `<span style="color:#bbb;">Min $:</span>`;
     h += `<input type="number" data-filter="minReward" value="${f.minReward || ''}" min="0" placeholder="any" />`;
     h += `</div>`;
+    h += `</div>`;
+
+    /* Estimated stats filter */
+    h += `<div class="tpda-bty-filter-row" style="margin-top:4px;">`;
+    h += `<span style="color:#bbb;font-size:11px;">Max Stats:</span>`;
+    h += `<select data-filter="maxStatIdx" style="background:#0f1116;color:#fff;border:1px solid #444;border-radius:4px;padding:2px 4px;font-size:11px;">`;
+    h += `<option value="-1"${f.maxStatIdx < 0 ? ' selected' : ''}>Any</option>`;
+    for (let i = 0; i < STAT_RANGES.length; i++) {
+      h += `<option value="${i}"${f.maxStatIdx === i ? ' selected' : ''} style="color:${STAT_COLORS[i]};">${STAT_RANGES[i]}</option>`;
+    }
+    h += `</select>`;
     h += `</div>`;
 
     /* Hospital timer filter */
@@ -1713,11 +1734,14 @@
           /* State icon */
           h += `<span style="color:${sColor};font-size:14px;min-width:18px;text-align:center;" title="${escapeHtml(b.stateLabel)}">${sIcon}</span>`;
 
-          /* Name + level */
+          /* Name + level + stats */
           h += `<div style="flex:1;min-width:0;">`;
           h += `<a class="tpda-bty-name-link" href="${profileUrl(b.targetId)}" target="_blank">${escapeHtml(b.targetName)}</a>`;
           h += ` <span style="color:#888;font-size:10px;">Lv${b.targetLevel}</span>`;
-          h += `<div style="font-size:10px;color:${sColor};">${escapeHtml(b.stateLabel)}${timerStr}</div>`;
+          const statLine = b.statEstimate
+            ? `<span style="color:${b.statEstimate.color};font-size:10px;"> ${escapeHtml(b.statEstimate.label)}</span>`
+            : '';
+          h += `<div style="font-size:10px;color:${sColor};">${escapeHtml(b.stateLabel)}${timerStr}${statLine}</div>`;
           h += `</div>`;
 
           /* Reward */

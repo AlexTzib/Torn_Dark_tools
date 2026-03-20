@@ -12,12 +12,14 @@ It displays a draggable bubble that expands into a panel listing active bounties
 || Feature | Description |
 ||---|---|
 || **Bounty list** | Fetches all active bounties from the Torn API (`torn/?selections=bounties`) |
-|| **Target enrichment** | Enriches each target with `user/{id}?selections=profile` to determine status, level, and timers (up to 30 targets per refresh, 350ms between calls) |
+|| **Target enrichment** | Enriches each target with `v2/user/{id}?selections=profile` to determine status, level, rank, estimated battle stats, and timers (up to 30 targets per refresh, 350ms between calls) |
 || **State filters** | Toggle visibility per state: In Torn (OK), Hospital, Jail, Abroad, Unknown |
 || **Level filter** | Max Level — hide targets above a configurable level threshold (0 = no limit) |
 || **Reward filter** | Min Reward — hide bounties below a configurable dollar amount (0 = no limit) |
+|| **Battle stats filter** | Max Stats — dropdown with 7 estimated stat ranges (< 2k through > 200M). Based on target's Torn rank. Hides targets above the selected range. |
 || **Hospital timer filter** | Hide hospital targets releasing in less than N minutes (configurable threshold, default 5 min) |
 || **State icons & colours** | Each bounty row shows a colour-coded icon: ✔ green (Torn), ⚕ red (Hospital), ⛔ orange (Jail), ✈ blue (Abroad), ❓ grey (Unknown) |
+|| **Estimated stats display** | Each bounty row shows the target's estimated stat range (colour-coded) next to their state label |
 || **Profile links** | Target name links to their Torn profile |
 || **Attack button** | Red "Attack" link per bounty row opens the attack page for the user to act manually |
 || **Bounty list cache** | 10-minute localStorage persistence — cached bounty list survives panel close/reopen and page navigation |
@@ -126,6 +128,7 @@ Calls are made sequentially with a **350ms gap** between each target lookup (~17
 || Target status | Torn API v2 (`v2/user/{id}?selections=profile`) | Returns profile data; parsed by `inferLocationState()` into state buckets. Handles v2 nested and flat formats. |
 || Location inference | Shared `inferLocationState()` in `common.js` | Classifies target as torn / hospital / jail / abroad / traveling / unknown |
 || Timer extraction | Shared `extractTimerInfo()` in `common.js` | Extracts remaining seconds for hospital / jail states |
+|| Stat estimation | Shared `estimateStats()` in `common.js` | Maps target's rank to one of 7 battle stat ranges using community-sourced rank-to-stat correlations |
 || API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance
@@ -162,8 +165,8 @@ Calls are made sequentially with a **350ms gap** between each target lookup (~17
 - **Bubble (orange gradient, "BTY")** — tap to expand; drag to reposition; 56px circle at z-index 999950
 - **Refresh** button — fetches the bounty list and enriches targets with current status
 - **○** button — collapses the panel back to the bubble
-- **Filters card** — toggle state visibility (In Torn, Hospital, Jail, Abroad, Unknown); set Max Level and Min Reward; toggle "hide hospital releasing soon" with configurable minute threshold
-- **Bounty rows** — each row shows: state icon (colour-coded), target name (profile link), level, state label with timer, reward amount, and an Attack button
+- **Filters card** — toggle state visibility (In Torn, Hospital, Jail, Abroad, Unknown); set Max Level, Min Reward, and Max Stats (estimated battle stat range dropdown); toggle "hide hospital releasing soon" with configurable minute threshold
+- **Bounty rows** — each row shows: state icon (colour-coded), target name (profile link), level, state label with timer, estimated stat range (colour-coded), reward amount, and an Attack button
 - **Status bar** — shows filtered/total count and last-updated time; progress indicator during enrichment
 - **Log** section — tap the header to expand; "Copy" copies all entries to clipboard
 

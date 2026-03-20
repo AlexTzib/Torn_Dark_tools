@@ -520,12 +520,12 @@ Every script has:
 
 **Key functions:**
 - `fetchBounties()` — Fetches `v2/torn/?selections=bounties` (v2 returns an **array**, v1 returned an object keyed by ID), parses bounty objects, saves to localStorage, then calls `enrichBountyTargets()`
-- `enrichBountyTargets()` — For up to 30 unique targets, fetches `v2/user/{id}?selections=profile` with 350ms gaps. Handles both v2 nested (`data.profile`) and flat response formats. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Results cached in localStorage (10-minute TTL) and memory (1-minute TTL).
+- `enrichBountyTargets()` — For up to 30 unique targets, fetches `v2/user/{id}?selections=profile` with 350ms gaps. Handles both v2 nested (`data.profile`) and flat response formats. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Uses `estimateStats()` from common.js to map rank → stat range. Results cached in localStorage (10-minute TTL) and memory (1-minute TTL).
 - `loadCachedBounties()` / `saveCachedBounties()` — Persist bounty list to localStorage
 - `loadCachedStatuses()` / `saveCachedStatuses()` — Persist target status cache to localStorage
 - `applyEnrichment()` — Merges status cache into bounty list, producing `STATE.enriched[]`
 - `filteredBounties()` — Applies all active filters to `STATE.enriched[]`
-- `renderPanel()` — Renders filter controls (state checkboxes, max level, min reward, hospital-soon filter), status bar, bounty rows with state icon, name (profile link), level, reward, timer, and Attack button
+- `renderPanel()` — Renders filter controls (state checkboxes, max level, min reward, max stats dropdown, hospital-soon filter), status bar, bounty rows with state icon, name (profile link), level, reward, stat estimate, timer, and Attack button
 
 **Filters:**
 | Filter | Default | Description |
@@ -537,6 +537,7 @@ Every script has:
 | Unknown | ON | Show targets whose status couldn't be determined |
 | Max Level | 0 (any) | Hide targets above this level |
 | Min Reward | 0 (any) | Hide bounties below this reward |
+| Max Stats | No limit | Dropdown: 7 estimated stat ranges (< 2k through > 200M). Based on target rank via `estimateStats()`. Hides targets above selected range |
 | Hide soon | OFF | Hide hospital targets releasing in < N minutes |
 
 **Data flow:**
@@ -545,8 +546,8 @@ Every script has:
 3. On panel open: render cached data immediately (no API calls)
 4. On Refresh: fetch bounty list from `v2/torn/?selections=bounties`, save to localStorage
 5. For each unique target (up to 30), fetch `v2/user/{id}?selections=profile` (1-min memory TTL, 10-min localStorage TTL, 350ms gaps)
-6. `inferLocationState()` + `extractTimerInfo()` determine state/timer from profile response
-7. `filteredBounties()` applies user filters, `renderPanel()` displays results
+6. `inferLocationState()` + `extractTimerInfo()` determine state/timer; `estimateStats()` maps rank → stat range
+7. `filteredBounties()` applies user filters (incl. stat range), `renderPanel()` displays results
 
 **API usage:**
 - 1 call for bounty list + up to 30 calls for target enrichment per refresh
