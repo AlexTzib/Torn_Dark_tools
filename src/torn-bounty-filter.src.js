@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
-// @version      1.3.0
+// @version      1.3.1
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -101,7 +101,7 @@
     if (!c || typeof c !== 'object') return;
     const now = Date.now();
     for (const [tid, e] of Object.entries(c)) {
-      if (e && e.fetchedAt && now - e.fetchedAt < PERSIST_TTL_MS) {
+      if (e && e.fetchedAt && now - e.fetchedAt < PERSIST_TTL_MS && 'rank' in e) {
         STATE.statusCache[tid] = e;
       }
     }
@@ -274,6 +274,8 @@
           const timer = extractTimerInfo(merged, loc.bucket);
           const rank = merged.rank || data.rank || '';
           const statEst = estimateStats(rank, merged.level || 0, 0, 0);
+          if (!rank) addLog(`#${tid} (${merged.name || '?'}): no rank in API response`);
+          else if (!statEst) addLog(`#${tid}: rank "${rank}" not in RANK_SCORES`);
           STATE.statusCache[tid] = {
             state: loc.bucket,
             label: loc.label,
@@ -343,8 +345,11 @@
       /* Reward filter */
       if (f.minReward > 0 && b.reward < f.minReward) return false;
 
-      /* Estimated stats filter */
-      if (f.maxStatIdx >= 0 && b.statEstimate && b.statEstimate.idx > f.maxStatIdx) return false;
+      /* Estimated stats filter — also block targets with unknown stats */
+      if (f.maxStatIdx >= 0) {
+        if (!b.statEstimate) return false;
+        if (b.statEstimate.idx > f.maxStatIdx) return false;
+      }
 
       /* "Soon" filter — hide hospital targets releasing in < N min */
       if (f.hideSoon && b.state === 'hospital' && b.remainingSec > 0 && b.remainingSec < f.soonMinutes * 60) return false;
