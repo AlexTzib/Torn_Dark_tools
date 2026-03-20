@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.4.0
+// @version      1.5.0
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -728,10 +728,23 @@
   }
 
   function generateOnlineReport(enemies) {
-    return enemies.map(e => {
-      const est = STATE.profileCache[e.id]?.estimate;
+    const enriched = enrichWithStats(enemies);
+    return enriched.map(e => {
+      const est = e.estimate;
       const tag = est ? ` [${est.label}]` : '';
-      return `${e.name}${tag} Lv${e.level || '?'} — ${attackUrl(e.id)}`;
+      let status = '';
+      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
+        status = ` — Hospital ${formatSeconds(e.remainingSec)}`;
+      } else if ((e.locationBucket === 'traveling' || e.locationBucket === 'abroad') && e.remainingSec != null) {
+        status = ` — ${e.locationLabel || 'Traveling'} lands ${formatSeconds(e.remainingSec)}`;
+      } else if (e.locationBucket === 'jail' && e.remainingSec != null) {
+        status = ` — Jail ${formatSeconds(e.remainingSec)}`;
+      } else if (e.locationLabel && e.locationBucket !== 'torn') {
+        status = ` — ${e.locationLabel}`;
+      } else {
+        status = ' — OK';
+      }
+      return `${e.name}${tag} Lv${e.level || '?'}${status} — ${attackUrl(e.id)}`;
     }).join('\n');
   }
 
