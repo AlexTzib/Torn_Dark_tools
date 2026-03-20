@@ -53,6 +53,31 @@ A compact poker hand evaluator for Torn's Strip Poker mini-game. Designed to be 
 - **DOM auto-scan** — attempts to read cards from the page automatically; falls back to manual input
 - **No API key needed** — pure client-side math, zero network calls
 
+### Market Sniper (Green "MKT" bubble)
+
+A market profit finder that scans item market and bazaar prices for your watchlist items, detects underpriced deals, and calculates profit metrics.
+
+- **Watchlist scanning** — scans a configurable list of high-liquidity items (Xanax, FHC, Erotic DVD, Donator Pack, and more)
+- **Dual-source pricing** — fetches item market (Torn API) and bazaar (TornW3B) floor prices
+- **Profit calculator** — buy price, sell price, estimated tax, net profit, ROI% for each item
+- **Filters & sorting** — minimum profit, minimum ROI, sort by profit/ROI/newest, hide dismissed deals
+- **Notifications** — browser alerts on deals exceeding your profit/ROI thresholds (with dedup)
+- **Bubble badge** — red counter showing how many profitable deals are available
+- **Customizable watchlist** — add/remove items directly in the panel
+
+### War Manager (Orange "MGR" bubble)
+
+A war target assignment manager that scans both your faction and the enemy faction, estimates battle stats, and helps assign targets.
+
+- **Dual-faction scanning** — fetches own and enemy faction member rosters
+- **Stat estimation** — scans member profiles, estimates total battle stats from rank, level, crimes, networth
+- **Target assignment** — matches your faction members to enemy targets based on a configurable stat threshold (default 120%)
+- **Member selector** — pick any own-faction member to see their recommended targets
+- **Online enemy report** — shows online enemies with attack links, profile links, copy name
+- **Copy-paste messages** — generates formatted assignment messages for faction chat
+- **Configurable polling** — 30s / 1min / 2min / 5min / 10min refresh rate
+- **Auto enemy detection** — detects enemy faction from URL, page links, or API war data
+
 ---
 
 ## Scripts
@@ -63,7 +88,9 @@ A compact poker hand evaluator for Torn's Strip Poker mini-game. Designed to be 
 | [**Plushie Prices**](torn-pda-deal-finder-bubble.md) | Purple teddy bear | Plushie bazaar vs item market price comparison | `market/{id}?selections=bazaar,itemmarket` (13 calls per refresh) |
 | [**War Bubble**](torn-war-bubble.md) | Red "WAR" | Enemy faction online tracker, location buckets, timer analysis, attack links | `faction/{id}?selections=basic` (configurable 30s–10min) |
 | [**Strip Poker Advisor**](torn-strip-poker-bubble.md) | Green "♠" | Poker hand evaluator, win probability, action suggestion | None (client-side only) |
+| [**War Manager**](torn-war-manager-bubble.md) | Orange "MGR" | War target assignment, stat estimation, online enemy report, message generation | `faction/?selections=basic` + `user/{id}?selections=profile,personalstats,criminalrecord` |
 | [**Bounty Filter**](torn-bounty-filter-bubble.md) | Orange "BTY" | Filter bounties by state (hospital/jail/abroad/in Torn), hospital timers, level, reward | `torn/?selections=bounties` + `user/{id}?selections=profile` |
+| [**Market Sniper**](torn-market-sniper-bubble.md) | Green "MKT" | Market profit finder — scans watchlist items for underpriced deals, shows profit/ROI | `/v2/market/{id}/itemmarket` + TornW3B bazaar (16 calls per scan) |
 
 ---
 
@@ -83,6 +110,7 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 - **AI Advisor** makes direct API calls for `user` and `faction` data using the user's own key, and also passively intercepts existing traffic for additional data.
 - **War Bubble** makes **one** read-only API call per polling cycle (configurable: 30s / 1min / 2min / 5min / 10min, only while the panel is open) using the minimum `selections=basic` endpoint.
 - **Strip Poker Advisor** makes **zero** API calls — it runs entirely on client-side poker math (Monte Carlo simulation).
+- **Market Sniper** makes **16** API calls per scan (8 watchlist items × 2 sources). Calls are spaced 300ms apart. Prices are cached for 5 minutes.
 
 ### 3. Transparent API Key Handling
 
@@ -108,15 +136,15 @@ All scripts that need an API key use a three-tier priority system:
 
 ## Torn Policy Compliance Summary
 
-| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker |
-|---|---|---|---|---|
-| No game-action automation | Compliant | Compliant | Compliant | Compliant |
-| One-click-one-action | Compliant | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed |
-| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all |
-| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) |
-| No request modification | Compliant | Compliant | Compliant | Compliant |
-| Read-only display | Compliant | Compliant | Compliant | Compliant |
+| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker | War Manager | Bounty Filter | Market Sniper |
+|---|---|---|---|---|---|---|---|
+| No game-action automation | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| One-click-one-action | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted |
+| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all | Only `api.torn.com` | Only `api.torn.com` | `api.torn.com` + `weav3r.dev` (item IDs only) |
+| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) | 2 faction + N profile calls, 650ms gaps | 1 + up to 30 calls, 350ms gaps, 1-2 min cache | 16 calls per scan, 300ms apart, 5-min cache |
+| No request modification | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| Read-only display | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
 
 For a detailed compliance breakdown, see each script's individual documentation in the `docs/` folder.
 
@@ -124,7 +152,7 @@ For a detailed compliance breakdown, see each script's individual documentation 
 
 ## Shared Architecture
 
-All four scripts share a common bubble/panel architecture:
+All seven scripts share a common bubble/panel architecture:
 
 ```
 ┌─────────────┐     click      ┌──────────────────┐
@@ -182,7 +210,7 @@ All four scripts share a common bubble/panel architecture:
 4. Navigate to `torn.com` — the bubble(s) will appear
 
 ### Multiple Scripts
-All four scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
+All seven scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
 
 ---
 
@@ -192,18 +220,31 @@ All four scripts can run simultaneously. They use separate z-index bases and aut
 Torn_Dark_tools/
 ├── AGENTS.md                              ← Developer reference (architecture, PDA internals, policies)
 ├── README.md                              ← this file
+├── build.py                               ← Build script: injects common.js into src/*.src.js → output .user.js
 ├── urls                                   ← raw GitHub URLs for Torn PDA remote loading
 ├── docs/
 │   ├── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
 │   └── community-repos.md                 ← Community Torn script repos analysis & learnings
-├── torn-assistant.user.js                 ← AI Advisor bubble script
+├── src/
+│   ├── common.js                          ← Shared utilities injected into all scripts at build time
+│   ├── torn-assistant.src.js              ← AI Advisor source
+│   ├── torn-pda-deal-finder-bubble.src.js ← Plushie Prices source
+│   ├── torn-war-bubble.src.js             ← War Bubble source
+│   ├── torn-strip-poker-bubble.src.js     ← Strip Poker Advisor source
+│   ├── torn-bounty-filter-bubble.src.js   ← Bounty Filter source
+│   └── torn-market-sniper.src.js          ← Market Sniper source
+├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
-├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble script
+├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
-├── torn-war-bubble.user.js                ← War Online bubble script
+├── torn-war-bubble.user.js                ← War Online bubble (built output)
 ├── torn-war-bubble.md                     ← War Bubble documentation
-├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor bubble script
-└── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
+├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor bubble (built output)
+├── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
+├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble (built output)
+├── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
+├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
+└── torn-market-sniper-bubble.md           ← Market Sniper documentation
 ```
 
 ---

@@ -135,6 +135,53 @@ GET https://api.torn.com/v2/market/{itemId}?selections=bazaar,itemmarket&key={ke
 
 **Error code 23** = "This selection is only available in API v2" — signals that a selection has been migrated and the v1 endpoint no longer serves it.
 
+### V2 Torn Bounties Endpoint
+
+As of March 2025, the `bounties` selection on the `torn` endpoint is **v2-only** (error code 23 on v1).
+
+**V1 (no longer works):**
+```
+GET https://api.torn.com/torn/?selections=bounties&key={key}
+→ { "bounties": { "id1": { "target_id": 123, "target_name": "...", ... }, "id2": {...} } }
+```
+Response was an **object** keyed by bounty ID.
+
+**V2 (current):**
+```
+GET https://api.torn.com/v2/torn/?selections=bounties&key={key}
+→ {
+    "bounties": [
+      { "target_id": 123, "target_name": "...", "target_level": 50, "lister_id": 456,
+        "lister_name": "...", "reward": 1000000, "reason": "...", "quantity": 1,
+        "is_anonymous": false, "valid_until": 1234567890 },
+      ...
+    ],
+    "bounties_timestamp": 1234567890,
+    "_metadata": { ... }
+  }
+```
+
+**Key differences:**
+- URL: `api.torn.com/torn/` → `api.torn.com/v2/torn/`
+- Response structure: `bounties` changes from **object** (keyed by ID) to **array** of bounty objects
+- No bounty ID in response — array index only
+- `is_anonymous` is boolean (`true`/`false`) instead of `0`/`1`
+- New fields: `reason` (string|null), `valid_until` (unix timestamp)
+- Field names: `lister_id`/`lister_name` (v1 used `listed_by`/`listed_by_name` in some contexts)
+- Supports `limit` and `offset` query parameters for pagination (default limit 100)
+
+**Defensive parsing pattern:**
+```javascript
+const raw = data?.bounties || data;
+if (Array.isArray(raw)) {
+  // V2 array format
+  for (const b of raw) { ... }
+} else if (raw && typeof raw === 'object') {
+  // V1 object format (fallback)
+  for (const [id, b] of Object.entries(raw)) { ... }
+}
+```
+
 ### V2 Migration Checklist
 
 When migrating a script from v1 to v2:

@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - Bounty Filter
+// @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
 // @version      1.0.0
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
@@ -64,15 +64,13 @@
   }
 
   function loadFilters() {
-    try {
-      const raw = localStorage.getItem(FILTER_STORAGE_KEY);
-      if (!raw) return defaultFilters();
-      return { ...defaultFilters(), ...JSON.parse(raw) };
-    } catch { return defaultFilters(); }
+    const saved = getStorage(FILTER_STORAGE_KEY, null);
+    if (!saved) return defaultFilters();
+    return { ...defaultFilters(), ...saved };
   }
 
   function saveFilters() {
-    try { localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(STATE.filters)); } catch {}
+    setStorage(FILTER_STORAGE_KEY, STATE.filters);
   }
 
   // #COMMON_CODE
@@ -102,8 +100,8 @@
     renderPanel();
 
     try {
-      const url = `https://api.torn.com/torn/?selections=bounties&key=${STATE.apiKey}&_tpda=1`;
-      addLog('Fetching bounties...');
+      const url = `https://api.torn.com/v2/torn/?selections=bounties&key=${STATE.apiKey}&_tpda=1`;
+      addLog('Fetching bounties (v2)...');
 
       let resp, data;
       if (typeof PDA_httpGet === 'function') {
@@ -122,23 +120,42 @@
         return;
       }
 
-      /* Parse bounties — API returns { bounties: { "id": { ... }, ... } } */
+      /* Parse bounties — v2 returns { bounties: [ {...}, ... ] } (array) */
       const raw = data?.bounties || data;
       const list = [];
-      if (raw && typeof raw === 'object') {
+      if (Array.isArray(raw)) {
+        for (let i = 0; i < raw.length; i++) {
+          const b = raw[i];
+          if (!b || typeof b !== 'object') continue;
+          list.push({
+            bountyId: String(i),
+            targetId: b.target_id || 0,
+            targetName: b.target_name || `#${b.target_id || i}`,
+            targetLevel: b.target_level || 0,
+            reward: b.reward || 0,
+            listedBy: b.lister_id || 0,
+            listedByName: b.lister_name || '',
+            isAnonymous: !!b.is_anonymous,
+            quantity: b.quantity || 1,
+            validUntil: b.valid_until || 0,
+            reason: b.reason || '',
+          });
+        }
+      } else if (raw && typeof raw === 'object') {
         for (const [id, b] of Object.entries(raw)) {
           if (!b || typeof b !== 'object') continue;
           list.push({
             bountyId: id,
-            targetId: b.target_id || b.target || b.targetID || parseInt(id),
-            targetName: b.target_name || b.name || `#${b.target_id || id}`,
-            targetLevel: b.target_level || b.level || 0,
-            reward: b.reward || b.bounty || 0,
+            targetId: b.target_id || parseInt(id),
+            targetName: b.target_name || `#${b.target_id || id}`,
+            targetLevel: b.target_level || 0,
+            reward: b.reward || 0,
             listedBy: b.listed_by || b.lister_id || 0,
             listedByName: b.listed_by_name || b.lister_name || '',
-            isAnonymous: b.is_anonymous || b.anonymous || 0,
+            isAnonymous: !!b.is_anonymous,
             quantity: b.quantity || 1,
-            hasExpired: b.has_expired || false,
+            validUntil: b.valid_until || 0,
+            reason: b.reason || '',
           });
         }
       }
@@ -635,7 +652,6 @@
     createPanel();
     window.addEventListener('resize', onResize);
 
-    console.log('[Torn PDA - Bounty Filter] Started.');
     addLog('Bounty Filter initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
   }
 

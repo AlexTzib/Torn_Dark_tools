@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - Safe AI Advisor Bubble
+// @name         Dark Tools - AI Advisor
 // @namespace    alex.torn.pda.safe.ai.bubble
 // @version      3.2.0
 // @description  Safe local Torn PDA advisor with draggable chat-head bubble and expandable panel
@@ -1125,63 +1125,6 @@
     }
   }
 
-  function hookFetch() {
-    const originalFetch = window.fetch;
-    if (!originalFetch) return;
-
-    window.fetch = async function (...args) {
-      const response = await originalFetch.apply(this, args);
-      try {
-        const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
-        if (url.includes('api.torn.com/')) {
-          extractApiKeyFromUrl(url);
-          // Skip our own calls (marked with _tpda=1) to avoid double-processing
-          if (!url.includes('_tpda=1')) {
-            const clone = response.clone();
-            const contentType = clone.headers.get('content-type') || '';
-            if (contentType.includes('application/json') || contentType.includes('text/plain')) {
-              const text = await clone.text();
-              const data = safeJsonParse(text);
-              handleApiPayload(url, data);
-            }
-          }
-        }
-      } catch (_) {}
-      return response;
-    };
-  }
-
-  function hookXHR() {
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this.__tpda_url = url;
-      try {
-        if (String(url || '').includes('api.torn.com/')) {
-          extractApiKeyFromUrl(String(url));
-        }
-      } catch {}
-      return origOpen.call(this, method, url, ...rest);
-    };
-
-    XMLHttpRequest.prototype.send = function (...args) {
-      this.addEventListener('load', function () {
-        try {
-          const url = String(this.__tpda_url || '');
-          if (!url.includes('api.torn.com/')) return;
-          // Skip our own calls (marked with _tpda=1) to avoid double-processing
-          if (url.includes('_tpda=1')) return;
-          const text = this.responseText;
-          const data = safeJsonParse(text);
-          handleApiPayload(url, data);
-        } catch (_) {}
-      });
-
-      return origSend.apply(this, args);
-    };
-  }
-
   function init() {
     initApiKey(PDA_INJECTED_KEY);
     addLog('AI Advisor initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
@@ -1197,8 +1140,6 @@
     } else {
       addLog('No API key at init — will rely on network interception');
     }
-
-    console.log('[Torn AI Assistant] Bubble mode started.');
   }
 
   // Install network hooks immediately so we capture API calls made before init runs

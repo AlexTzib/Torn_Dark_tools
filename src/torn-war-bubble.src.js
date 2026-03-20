@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - War Online Bubble (Location + Timers)
+// @name         Dark Tools - War Bubble
 // @namespace    alex.torn.pda.war.online.location.timers.bubble
 // @version      3.5.0
 // @description  Local-only war bubble showing enemy faction members online/recently active, location buckets, timers, and faster-than-expected timer drops
@@ -606,15 +606,19 @@
       const atkUrl = attackUrl(m.id);
       const profile = STATE.profileCache[m.id];
       const est = profile?.estimate;
+      const rank = profile?.rank;
+      const mid2 = est?.midpoint;
+      const statDisplay = rank
+        ? ` <span style="color:${est?.color || '#bbb'};font-weight:bold;">[${escapeHtml(rank)} ~${formatStatCompact(mid2)}]</span>`
+        : (est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : '');
       return `
         <div style="padding:6px 0;border-top:1px solid #2a2d38;">
           <div class="${cls}">
             <strong>${mname}</strong>
-            ${m.level ? ` • Lv ${escapeHtml(m.level)}` : ''}
-            ${m.position ? ` • ${escapeHtml(m.position)}` : ''}
-            ${est ? ` <span style="font-size:11px;color:${est.color};font-weight:bold;margin-left:4px;">[${escapeHtml(est.label)}]</span>` : ''}
+            ${m.level ? ` <span style="color:#bbb;font-size:12px;">Lv ${escapeHtml(m.level)}</span>` : ''}
+            ${statDisplay}
           </div>
-          ${profile?.rank ? `<div style="font-size:11px;color:#c4a0e8;">${escapeHtml(profile.rank)}</div>` : ''}
+          ${m.position ? `<div style="font-size:11px;color:#888;">${escapeHtml(m.position)}</div>` : ''}
           <div style="font-size:12px;color:#bbb;">
             ${m.isOnline ? 'Online now' : `Last action: ${escapeHtml(m.relative || `${m.minutes}m`)}`} • ${escapeHtml(m.locationLabel)}
           </div>
@@ -856,7 +860,6 @@
     await detectEnemyFaction();
     window.addEventListener('resize', onResize);
     startPolling();
-    console.log('[War Online Bubble - Location + Timers] Started.');
     addLog('War Bubble initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
     if (STATE.enemyFactionId) {
       await refreshEnemyFactionData();

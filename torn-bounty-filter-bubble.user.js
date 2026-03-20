@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - Bounty Filter
+// @name         Dark Tools - Bounty Filter
 // @namespace    alex.torn.pda.bountyfilter.bubble
 // @version      1.0.0
 // @description  Fetches bounties from Torn API and filters by target state (hospital, jail, abroad, in Torn), hospital release timers, and level. Attack links for easy claiming.
@@ -64,15 +64,13 @@
   }
 
   function loadFilters() {
-    try {
-      const raw = localStorage.getItem(FILTER_STORAGE_KEY);
-      if (!raw) return defaultFilters();
-      return { ...defaultFilters(), ...JSON.parse(raw) };
-    } catch { return defaultFilters(); }
+    const saved = getStorage(FILTER_STORAGE_KEY, null);
+    if (!saved) return defaultFilters();
+    return { ...defaultFilters(), ...saved };
   }
 
   function saveFilters() {
-    try { localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(STATE.filters)); } catch {}
+    setStorage(FILTER_STORAGE_KEY, STATE.filters);
   }
 
     /* ===================================================================
@@ -500,14 +498,21 @@
     if (!originalFetch) return;
 
     window.fetch = async function (...args) {
+      const response = await originalFetch.apply(this, args);
       try {
         const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
         if (url.includes('api.torn.com/')) {
           extractApiKeyFromUrl(url);
+          if (typeof handleApiPayload === 'function' && !url.includes('_tpda=1')) {
+            const clone = response.clone();
+            const ct = clone.headers.get('content-type') || '';
+            if (ct.includes('json') || ct.includes('text/plain')) {
+              clone.text().then(t => { const d = safeJsonParse(t); if (d) handleApiPayload(url, d); }).catch(() => {});
+            }
+          }
         }
       } catch {}
-
-      return originalFetch.apply(this, args);
+      return response;
     };
   }
 
@@ -527,6 +532,17 @@
     };
 
     XMLHttpRequest.prototype.send = function (...args) {
+      this.addEventListener('load', function () {
+        try {
+          const url = String(this.__tpda_url || '');
+          if (!url.includes('api.torn.com/')) return;
+          if (url.includes('_tpda=1')) return;
+          if (typeof handleApiPayload === 'function') {
+            const data = safeJsonParse(this.responseText);
+            if (data) handleApiPayload(url, data);
+          }
+        } catch {}
+      });
       return origSend.apply(this, args);
     };
   }
@@ -585,6 +601,14 @@
     return RANK_STAT_MIDPOINTS[rank] || 0;
   }
 
+  function formatStatCompact(n) {
+    if (n == null || isNaN(n)) return '?';
+    if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+    return String(Math.round(n));
+  }
+
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
   const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
@@ -609,7 +633,7 @@
               : rs <= 20 ? 4
               : rs <= 24 ? 5
               :            6;
-    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx };
+    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx, midpoint: RANK_STAT_MIDPOINTS[rank] || STAT_MIDPOINTS[idx] };
   }
 
   /* ── Profile cache ─────────────────────────────────────────── */
@@ -667,6 +691,64 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ── Cross-origin GET (PDA native HTTP with fetch fallback) ──
+   *  Used for external APIs like TornW3B (weav3r.dev).
+   *  PDA WebView blocks plain fetch to external domains even with
+   *  CORS headers; PDA_httpGet uses Flutter native HTTP instead. */
+
+  async function crossOriginGet(url) {
+    if (typeof PDA_httpGet === 'function') {
+      addLog('[W3B] using PDA_httpGet');
+      const r = await PDA_httpGet(url, {});
+      if (r && r.responseText) return JSON.parse(r.responseText);
+      throw new Error(`PDA_httpGet status ${r?.status || 'unknown'}`);
+    }
+    addLog('[W3B] using fetch');
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+  /* ── Shared profit calculator ────────────────────────────────
+   *  Reusable by any feature that needs buy/sell/tax/profit math.
+   *  Returns null if inputs are invalid. */
+
+  function calcDealProfit(buyPrice, sellPrice, taxPct, extraFees) {
+    if (!buyPrice || buyPrice <= 0 || !sellPrice || sellPrice <= 0) return null;
+    taxPct = Number(taxPct) || 0;
+    extraFees = Number(extraFees) || 0;
+    const taxAmount = Math.round(sellPrice * taxPct / 100);
+    const netProfit = sellPrice - buyPrice - taxAmount - extraFees;
+    const roiPct = buyPrice > 0 ? Math.round(netProfit / buyPrice * 10000) / 100 : 0;
+    return { buyPrice, sellPrice, taxPct, taxAmount, extraFees, netProfit, roiPct };
+  }
+
+  /* ── Notification helper (with dedup) ───────────────────────
+   *  Shared notification system with duplicate suppression.
+   *  Returns true if a new notification was fired, false if suppressed. */
+
+  const _tpdaNotifyCache = {};
+
+  function tpdaNotify(key, title, body, ttlMs) {
+    ttlMs = ttlMs || 5 * 60 * 1000;
+    const now = Date.now();
+    if (_tpdaNotifyCache[key] && (now - _tpdaNotifyCache[key]) < ttlMs) return false;
+    _tpdaNotifyCache[key] = now;
+    for (const k of Object.keys(_tpdaNotifyCache)) {
+      if (now - _tpdaNotifyCache[k] > ttlMs * 2) delete _tpdaNotifyCache[k];
+    }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try { new Notification(title, { body, tag: key, silent: false }); } catch {}
+    }
+    return true;
+  }
+
+  function tpdaRequestNotifyPermission() {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }
 
   /* ── War-shared helpers ─────────────────────────────────────── */
 
@@ -1083,8 +1165,8 @@
     renderPanel();
 
     try {
-      const url = `https://api.torn.com/torn/?selections=bounties&key=${STATE.apiKey}&_tpda=1`;
-      addLog('Fetching bounties...');
+      const url = `https://api.torn.com/v2/torn/?selections=bounties&key=${STATE.apiKey}&_tpda=1`;
+      addLog('Fetching bounties (v2)...');
 
       let resp, data;
       if (typeof PDA_httpGet === 'function') {
@@ -1103,23 +1185,42 @@
         return;
       }
 
-      /* Parse bounties — API returns { bounties: { "id": { ... }, ... } } */
+      /* Parse bounties — v2 returns { bounties: [ {...}, ... ] } (array) */
       const raw = data?.bounties || data;
       const list = [];
-      if (raw && typeof raw === 'object') {
+      if (Array.isArray(raw)) {
+        for (let i = 0; i < raw.length; i++) {
+          const b = raw[i];
+          if (!b || typeof b !== 'object') continue;
+          list.push({
+            bountyId: String(i),
+            targetId: b.target_id || 0,
+            targetName: b.target_name || `#${b.target_id || i}`,
+            targetLevel: b.target_level || 0,
+            reward: b.reward || 0,
+            listedBy: b.lister_id || 0,
+            listedByName: b.lister_name || '',
+            isAnonymous: !!b.is_anonymous,
+            quantity: b.quantity || 1,
+            validUntil: b.valid_until || 0,
+            reason: b.reason || '',
+          });
+        }
+      } else if (raw && typeof raw === 'object') {
         for (const [id, b] of Object.entries(raw)) {
           if (!b || typeof b !== 'object') continue;
           list.push({
             bountyId: id,
-            targetId: b.target_id || b.target || b.targetID || parseInt(id),
-            targetName: b.target_name || b.name || `#${b.target_id || id}`,
-            targetLevel: b.target_level || b.level || 0,
-            reward: b.reward || b.bounty || 0,
+            targetId: b.target_id || parseInt(id),
+            targetName: b.target_name || `#${b.target_id || id}`,
+            targetLevel: b.target_level || 0,
+            reward: b.reward || 0,
             listedBy: b.listed_by || b.lister_id || 0,
             listedByName: b.listed_by_name || b.lister_name || '',
-            isAnonymous: b.is_anonymous || b.anonymous || 0,
+            isAnonymous: !!b.is_anonymous,
             quantity: b.quantity || 1,
-            hasExpired: b.has_expired || false,
+            validUntil: b.valid_until || 0,
+            reason: b.reason || '',
           });
         }
       }
@@ -1616,7 +1717,6 @@
     createPanel();
     window.addEventListener('resize', onResize);
 
-    console.log('[Torn PDA - Bounty Filter] Started.');
     addLog('Bounty Filter initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
   }
 

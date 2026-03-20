@@ -423,14 +423,21 @@
     if (!originalFetch) return;
 
     window.fetch = async function (...args) {
+      const response = await originalFetch.apply(this, args);
       try {
         const url = String(args[0] && args[0].url ? args[0].url : args[0] || '');
         if (url.includes('api.torn.com/')) {
           extractApiKeyFromUrl(url);
+          if (typeof handleApiPayload === 'function' && !url.includes('_tpda=1')) {
+            const clone = response.clone();
+            const ct = clone.headers.get('content-type') || '';
+            if (ct.includes('json') || ct.includes('text/plain')) {
+              clone.text().then(t => { const d = safeJsonParse(t); if (d) handleApiPayload(url, d); }).catch(() => {});
+            }
+          }
         }
       } catch {}
-
-      return originalFetch.apply(this, args);
+      return response;
     };
   }
 
@@ -450,6 +457,17 @@
     };
 
     XMLHttpRequest.prototype.send = function (...args) {
+      this.addEventListener('load', function () {
+        try {
+          const url = String(this.__tpda_url || '');
+          if (!url.includes('api.torn.com/')) return;
+          if (url.includes('_tpda=1')) return;
+          if (typeof handleApiPayload === 'function') {
+            const data = safeJsonParse(this.responseText);
+            if (data) handleApiPayload(url, data);
+          }
+        } catch {}
+      });
       return origSend.apply(this, args);
     };
   }
@@ -508,6 +526,14 @@
     return RANK_STAT_MIDPOINTS[rank] || 0;
   }
 
+  function formatStatCompact(n) {
+    if (n == null || isNaN(n)) return '?';
+    if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+    return String(Math.round(n));
+  }
+
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
   const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
@@ -532,7 +558,7 @@
               : rs <= 20 ? 4
               : rs <= 24 ? 5
               :            6;
-    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx };
+    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx, midpoint: RANK_STAT_MIDPOINTS[rank] || STAT_MIDPOINTS[idx] };
   }
 
   /* ── Profile cache ─────────────────────────────────────────── */
@@ -590,6 +616,64 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ── Cross-origin GET (PDA native HTTP with fetch fallback) ──
+   *  Used for external APIs like TornW3B (weav3r.dev).
+   *  PDA WebView blocks plain fetch to external domains even with
+   *  CORS headers; PDA_httpGet uses Flutter native HTTP instead. */
+
+  async function crossOriginGet(url) {
+    if (typeof PDA_httpGet === 'function') {
+      addLog('[W3B] using PDA_httpGet');
+      const r = await PDA_httpGet(url, {});
+      if (r && r.responseText) return JSON.parse(r.responseText);
+      throw new Error(`PDA_httpGet status ${r?.status || 'unknown'}`);
+    }
+    addLog('[W3B] using fetch');
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+  /* ── Shared profit calculator ────────────────────────────────
+   *  Reusable by any feature that needs buy/sell/tax/profit math.
+   *  Returns null if inputs are invalid. */
+
+  function calcDealProfit(buyPrice, sellPrice, taxPct, extraFees) {
+    if (!buyPrice || buyPrice <= 0 || !sellPrice || sellPrice <= 0) return null;
+    taxPct = Number(taxPct) || 0;
+    extraFees = Number(extraFees) || 0;
+    const taxAmount = Math.round(sellPrice * taxPct / 100);
+    const netProfit = sellPrice - buyPrice - taxAmount - extraFees;
+    const roiPct = buyPrice > 0 ? Math.round(netProfit / buyPrice * 10000) / 100 : 0;
+    return { buyPrice, sellPrice, taxPct, taxAmount, extraFees, netProfit, roiPct };
+  }
+
+  /* ── Notification helper (with dedup) ───────────────────────
+   *  Shared notification system with duplicate suppression.
+   *  Returns true if a new notification was fired, false if suppressed. */
+
+  const _tpdaNotifyCache = {};
+
+  function tpdaNotify(key, title, body, ttlMs) {
+    ttlMs = ttlMs || 5 * 60 * 1000;
+    const now = Date.now();
+    if (_tpdaNotifyCache[key] && (now - _tpdaNotifyCache[key]) < ttlMs) return false;
+    _tpdaNotifyCache[key] = now;
+    for (const k of Object.keys(_tpdaNotifyCache)) {
+      if (now - _tpdaNotifyCache[k] > ttlMs * 2) delete _tpdaNotifyCache[k];
+    }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try { new Notification(title, { body, tag: key, silent: false }); } catch {}
+    }
+    return true;
+  }
+
+  function tpdaRequestNotifyPermission() {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }
 
   /* ── War-shared helpers ─────────────────────────────────────── */
 

@@ -29,20 +29,35 @@ This file contains everything an AI agent (or human developer) needs to understa
 Torn_Dark_tools/
 ├── AGENTS.md                              ← THIS FILE — developer reference
 ├── README.md                              ← User-facing project documentation
+├── build.py                               ← Build script: injects common.js into src/*.src.js → output .user.js
 ├── urls                                   ← Raw GitHub URLs for Torn PDA remote loading
 ├── docs/
+│   ├── common-api.md                      ← Shared common.js API reference
 │   ├── torn-api-patterns.md               ← Torn API patterns, DOM selectors, community research
 │   └── community-repos.md                 ← Community Torn script repos analysis & learnings
-├── torn-assistant.user.js                 ← AI Advisor bubble (~1517 lines)
+├── src/
+│   ├── common.js                          ← Shared utilities injected into all scripts at build time
+│   ├── torn-assistant.src.js              ← AI Advisor source
+│   ├── torn-deal-finder.src.js            ← Plushie Prices source
+│   ├── torn-war-bubble.src.js             ← War Bubble source
+│   ├── torn-strip-poker.src.js            ← Strip Poker Advisor source
+│   ├── torn-war-manager.src.js            ← War Manager source
+│   ├── torn-bounty-filter.src.js          ← Bounty Filter source
+│   └── torn-market-sniper.src.js          ← Market Sniper source
+├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
-├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (~794 lines)
+├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
 ├── torn-pda-deal-finder-bubble.md         ← Plushie Prices documentation
-├── torn-war-bubble.user.js                ← War Bubble (~1540 lines)
+├── torn-war-bubble.user.js                ← War Bubble (built output)
 ├── torn-war-bubble.md                     ← War Bubble documentation
-├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (~950 lines)
+├── torn-strip-poker-bubble.user.js        ← Strip Poker Advisor (built output)
 ├── torn-strip-poker-bubble.md             ← Strip Poker Advisor documentation
-├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble
-└── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
+├── torn-war-manager.user.js               ← War Manager (built output)
+├── torn-war-manager-bubble.md             ← War Manager documentation
+├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble (built output)
+├── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
+├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
+└── torn-market-sniper-bubble.md           ← Market Sniper documentation
 ```
 
 - **Remote:** `https://github.com/AlexTzib/Torn_Dark_tools.git`
@@ -260,13 +275,15 @@ Each script uses a unique z-index base so they can coexist:
 
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
+| Market Sniper | 999940 | `tpda-mkt-bubble` | `tpda-mkt-panel` |
+| War Manager | 999945 | `tpda-war-mgr-bubble` | `tpda-war-mgr-panel` |
 | Bounty Filter | 999950 | `tpda-bounty-bubble` | `tpda-bounty-panel` |
 | Strip Poker Advisor | 999960 | `tpda-poker-bubble` | `tpda-poker-panel` |
 | War Bubble | 999970 | `tpda-war-online-bubble` | `tpda-war-online-panel` |
 | Plushie Prices | 999980 | `tpda-plushie-bubble` | `tpda-plushie-panel` |
 | AI Advisor | 999990 | `tpda-safe-ai-bubble` | `tpda-safe-ai-panel` |
 
-When adding a new script, pick a z-index base that doesn't collide (e.g., 999940).
+When adding a new script, pick a z-index base that doesn't collide (e.g., 999935).
 
 ### localStorage Keys
 
@@ -278,7 +295,9 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | Plushie Prices | `tpda_plushie_prices_v1` | `_apikey`, `_bubble_pos`, `_panel_pos`, `_prices` |
 | War Bubble | `tpda_war_online_location_timers_bubble_v3` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_enemy_faction_id`, `_timer_track`, `_poll_interval`, `_collapsed` |
 | Strip Poker | `tpda_strip_poker_v1` | `_bubble_pos`, `_panel_pos` |
+| War Manager | `tpda_war_manager_v1` | `_bubble_pos`, `_panel_pos`, `_threshold_pct`, `_poll_ms`, `_enemy_faction_id` |
 | Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters` |
+| Market Sniper | `tpda_market_sniper_v1` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_watchlist`, `_prices`, `_dismissed`, `_filters` |
 
 ### Debug Log Pattern
 
@@ -433,7 +452,7 @@ Every script has:
 **Design choices (pocket-friendly):**
 - **40 px bubble** (vs standard 56 px) — won't cover the poker table on mobile
 - **260 px panel** (vs standard 390–420 px) — leaves room for the game UI
-- **z-index base 999960** — lowest of all scripts, sits behind other bubbles
+- **z-index base 999960** — sits behind war bubble and above bounty filter
 - **No API calls** — zero external network overhead (XHR/fetch hooks only intercept Torn's own game data)
 
 **Key functions:**
@@ -497,10 +516,10 @@ Every script has:
 - **56 px bubble** with orange gradient, labeled "BTY"
 - **380 px panel** — filter controls at top, scrollable bounty list below
 - **z-index base 999950** — below all other scripts
-- **Two-phase data fetch:** First fetches bounty list from `torn/?selections=bounties`, then enriches each target with `user/{id}?selections=profile` to get their status
+- **Two-phase data fetch:** First fetches bounty list from `v2/torn/?selections=bounties` (v2 API — the `bounties` selection was migrated to v2-only in March 2025), then enriches each target with `user/{id}?selections=profile` to get their status
 
 **Key functions:**
-- `fetchBounties()` — Fetches `torn/?selections=bounties`, parses bounty objects, then calls `enrichBountyTargets()`
+- `fetchBounties()` — Fetches `v2/torn/?selections=bounties` (v2 returns an **array**, v1 returned an object keyed by ID), parses bounty objects, then calls `enrichBountyTargets()`
 - `enrichBountyTargets()` — For up to 30 unique targets, fetches `user/{id}?selections=profile` with 350ms gaps. Uses `inferLocationState()` and `extractTimerInfo()` from common.js to determine state/timers. Results cached in `STATE.statusCache` (1-minute TTL)
 - `applyEnrichment()` — Merges status cache into bounty list, producing `STATE.enriched[]`
 - `filteredBounties()` — Applies all active filters to `STATE.enriched[]`
@@ -520,7 +539,7 @@ Every script has:
 
 **Data flow:**
 1. API key resolved (PDA > shared manual > intercepted)
-2. On panel open (or Refresh): fetch bounty list from `torn/?selections=bounties` (2-min cache)
+2. On panel open (or Refresh): fetch bounty list from `v2/torn/?selections=bounties` (2-min cache)
 3. For each unique target (up to 30), fetch `user/{id}?selections=profile` (1-min cache, 350ms gaps)
 4. `inferLocationState()` + `extractTimerInfo()` determine state/timer from profile response
 5. `filteredBounties()` applies user filters, `renderPanel()` displays results
@@ -529,6 +548,107 @@ Every script has:
 - 1 call for bounty list + up to 30 calls for target enrichment per refresh
 - 350ms gap between enrichment calls (~170 calls/min if only this script)
 - Caching prevents redundant calls (2-min bounty list, 1-min per target)
+
+### Market Sniper (`torn-market-sniper-bubble.user.js`)
+
+**Purpose:** Market profit finder — scans item market and bazaar prices for watchlist items, detects underpriced deals, and shows profit/ROI metrics. Notifications on high-value opportunities.
+
+**Design:**
+- **56 px bubble** with green gradient, labeled "MKT"
+- **380 px panel** — settings/filters at top, scrollable deal cards below
+- **z-index base 999940** — lowest of all scripts
+- **Dual-source pricing:** Torn API v2 itemmarket + TornW3B bazaar for each watchlist item
+- **Uses shared `calcDealProfit()` and `tpdaNotify()`** from `common.js`
+
+**Key constants:**
+- `DEFAULT_WATCHLIST` — 8 high-liquidity items: Xanax (206), Vicodin (196), FHC (367), Erotic DVD (366), Donator Pack (370), Energy Drink (283), Morphine (197), SED (398)
+- `API_DELAY_MS = 300` — gap between items during scan
+- `CACHE_TTL_MS = 5 * 60 * 1000` — 5-minute price cache
+- `DISMISS_TTL_MS = 60 * 60 * 1000` — 1-hour dismiss expiry
+- `NOTIFY_DEDUP_MS = 5 * 60 * 1000` — 5-minute notification dedup
+
+**Key functions:**
+- `crossOriginGet(url)` — Cross-origin GET: `PDA_httpGet` first (native Flutter HTTP), falls back to `fetch()`. Same pattern as Plushie Prices.
+- `fetchItemMarketData(itemId)` — Fetches `/v2/market/{id}/itemmarket`; returns `{ floor, avg, count, itemName }`
+- `fetchItemBazaarData(itemId)` — Fetches `weav3r.dev/api/marketplace/{id}` via `crossOriginGet()`; returns `{ bazaarFloor, bazaarAvg, bazaarCount, bazaarSellerId }`
+- `scanAllItems()` — For each watchlist item: calls both `fetchItemMarketData` and `fetchItemBazaarData` in parallel (`Promise.all`), sleeps 300ms before the next item. Triggers `buildDeals()` and `checkNotifications()` on completion.
+- `buildDeals()` — For each watchlist item: determines best buy price (min of market floor and bazaar floor), uses `calcDealProfit()` from common.js to compute net profit/ROI. Populates `STATE.deals[]`.
+- `filteredDeals()` — Applies active filters (profitableOnly, minProfit, minRoi, hideDismissed) and sorts by `netProfit`/`roiPct`/`discoveredAt`.
+- `checkNotifications()` — Iterates deals, fires `tpdaNotify()` for any exceeding profit/ROI thresholds. Dedup via `tpdaNotify()`'s built-in TTL cache.
+- `updateBubbleBadge()` — Updates red badge count on the bubble showing profitable deal count.
+- `renderPanel()` — Renders settings section (filters, thresholds, watchlist edit), scan status bar, deal cards (buy/sell/profit/ROI with color coding), and debug log.
+
+**Filters/Settings:**
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Profitable only | ON | Hide items with negative or zero profit |
+| Min Profit | $0 (any) | Hide deals below this net profit |
+| Min ROI | 0% (any) | Hide deals below this ROI% |
+| Hide dismissed | ON | Hide deals the user has dismissed |
+| Sort by | Net Profit | Sort deals by netProfit / roiPct / discoveredAt |
+| Tax estimate | 0% | Conservative tax estimate for profit calculation |
+| Notify enabled | ON | Browser notifications on high-value deals |
+| Notify min profit | $100,000 | Minimum profit to trigger notification |
+| Notify min ROI | 10% | Minimum ROI% to trigger notification |
+
+**Data flow:**
+1. API key resolved (PDA > manual > intercepted)
+2. On panel open: loads cached prices, auto-scans if cache older than 5 minutes
+3. For each watchlist item (sequentially, 300ms apart):
+   - `fetchItemMarketData()` → Torn API v2 → `{ floor, avg, count }`
+   - `fetchItemBazaarData()` → TornW3B → `{ bazaarFloor, bazaarAvg, bazaarCount }`
+   - Both run in parallel via `Promise.all`
+4. `buildDeals()` computes profit: `bestBuy = min(market floor, bazaar floor)`, `sell = market avg`, profit via `calcDealProfit()`
+5. `filteredDeals()` applies filters/sort, `renderPanel()` displays deal cards
+6. `checkNotifications()` fires browser alerts on exceptional deals
+7. Bubble badge updates with profitable deal count
+
+**API usage:**
+- 8 items × 2 calls each = 16 API calls per scan, 300ms apart (~32 calls/min)
+- Caching prevents redundant calls (5-min TTL)
+- Dismissed deals persist for 1 hour in localStorage
+
+### War Manager (`torn-war-manager.user.js`)
+
+**Purpose:** War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage threshold, online enemy report with attack links, generates copy-paste assignment messages.
+
+**Design:**
+- **56 px bubble** with orange gradient, labeled "MGR"
+- **380 px panel** — war status card, settings, member selector, assignment cards, online enemy report
+- **z-index base 999945** — below bounty filter
+- **Dual-faction data:** Fetches own and enemy faction rosters, enriches with profile/stat data
+
+**Key constants:**
+- `DEFAULT_POLL_MS = 120000` — 2-minute default polling interval
+- `DEFAULT_THRESHOLD_PCT = 120` — default stat threshold (120% of enemy stats)
+- `STAT_SAFETY_FACTOR = 0.7` — conservative multiplier for stat matching
+- `POLL_INTERVALS` — configurable: `[30s, 1min, 2min, 5min, 10min]`
+
+**Key functions:**
+- `fetchOwnFactionMembers()` — Fetches own faction via `api.torn.com/faction/?selections=basic`
+- `fetchEnemyFactionMembers()` — Fetches enemy faction via `api.torn.com/faction/{id}?selections=basic`
+- `scanAllStats()` — Scans both factions' members via `fetchMemberProfile()` with 650ms gaps
+- `enrichWithStats(members)` — Attaches stat estimates to normalized member list
+- `sortEnemiesByPriority()` — Sorts by: hospital timer (soonest first), online status, stat estimate
+- `computeAssignments()` — Assigns targets to own members by stat threshold percentage
+- `getTargetsForMember(memberId)` — Returns matched targets for a specific own-faction member
+- `generateAssignmentMessages()` / `generateCompactMessages()` / `generateSelectedTargetMessages()` — Copy-paste message formatters
+- `generateOnlineReport()` — Text summary of online enemies with attack URLs
+- `detectEnemyFaction()` — Multi-strategy: URL parameter, page links, API war data
+- `startPolling()` / `restartPolling()` — Configurable interval polling
+
+**Data flow:**
+1. API key resolved (PDA > manual > intercepted)
+2. Faction ID auto-detected from URL or manually entered
+3. `refreshAll()` fetches both faction rosters in parallel
+4. `scanAllStats()` enriches members with profile/stat estimates
+5. `computeAssignments()` matches own members to enemy targets
+6. `renderPanel()` displays member selector, target lists, online enemy report
+7. Copy buttons generate formatted messages for faction chat
+
+**API usage:**
+- 2 calls for faction rosters + N profile calls per scan (650ms gaps)
+- Polling only runs when panel is open, configurable 30s–10min intervals
 
 ---
 
@@ -749,19 +869,20 @@ V1: https://api.torn.com/{section}/{id}?selections={selections}&key={apiKey}
 V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 ```
 
-> **Important:** Torn is actively migrating selections from v1 to v2-only. The `bazaar` and `itemmarket` selections on the `market` endpoint are now v2-only (error code 23 on v1). See `docs/torn-api-patterns.md` for the full migration guide.
+> **Important:** Torn is actively migrating selections from v1 to v2-only. The `bazaar` and `itemmarket` selections on the `market` endpoint, and the `bounties` selection on the `torn` endpoint, are now v2-only (error code 23 on v1). See `docs/torn-api-patterns.md` for the full migration guide.
 
 ### Sections Used by These Scripts
 
 | Section | Selections | Used By | Purpose |
 |---|---|---|---|
 | `user` | `bars,cooldowns,battlestats,stocks,money,profile` | AI Advisor | Player status, bars, cooldowns, money |
-| `faction` | `basic` | AI Advisor, War Bubble | Faction members, war status |
-| `market` (v2) | `itemmarket` (via `/v2/market/{id}/itemmarket`) | Plushie Prices | Item market floor and average prices per item |
-| *(external)* | TornW3B `weav3r.dev/api/marketplace/{id}` | Plushie Prices | Bazaar floor prices (no API key needed) |
+| `faction` | `basic` | AI Advisor, War Bubble, War Manager | Faction members, war status |
+| `market` (v2) | `itemmarket` (via `/v2/market/{id}/itemmarket`) | Plushie Prices, Market Sniper | Item market floor and average prices per item |
+| *(external)* | TornW3B `weav3r.dev/api/marketplace/{id}` | Plushie Prices, Market Sniper | Bazaar floor prices (no API key needed) |
 | `torn` | (various, intercepted) | AI Advisor | Market data, item values |
-| `torn` | `bounties` | Bounty Filter | Current bounty list |
-| `user` (by ID) | `profile` | Bounty Filter | Target state (hospital/jail/abroad/in Torn), timers |
+| `torn` (v2) | `bounties` (via `/v2/torn/?selections=bounties`) | Bounty Filter | Current bounty list (v2-only since March 2025, returns array) |
+| `user` (by ID) | `profile` | Bounty Filter, War Bubble, War Manager | Target state, timers, stat estimation |
+| `user` (by ID) | `profile,personalstats,criminalrecord` | War Bubble, War Manager | Full profile for stat estimation |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
 
@@ -771,7 +892,9 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 - Our scripts stay well under this:
   - AI Advisor: on-demand only (init + manual refresh)
   - War Bubble: configurable 30s–10min intervals, only when panel is open
+  - War Manager: 2 faction calls + N profile scans (650ms gaps), configurable 30s–10min intervals
   - Plushie Prices: 13 calls per refresh, 250ms apart (~52/min), cached for 10 minutes
+  - Market Sniper: 16 calls per scan, 300ms apart (~32/min), cached for 5 minutes
 
 ### Key API Response Fields (Faction Basic)
 

@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - Strip Poker Advisor
+// @name         Dark Tools - Strip Poker
 // @namespace    alex.torn.pda.strippoker.bubble
 // @version      2.2.0
 // @description  Texas Hold'em advisor for Torn Strip Poker. Auto-detects hole + community cards, evaluates best-of-7 hand via Monte Carlo, suggests optimal play.
@@ -1190,8 +1190,7 @@
     startCardPolling();
     startCardObserver();
     window.addEventListener('resize', onResize);
-    addLog('Strip Poker Advisor v2.1.0 initialized' + (STATE.apiKey ? '' : ' — waiting for API key'));
-    console.log('[Strip Poker Advisor] v2.1.0 Started.');
+    addLog('Strip Poker Advisor initialized');
   }
 
   /* Install network hooks immediately (before DOM is ready) so we catch early game data */

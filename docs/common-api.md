@@ -31,13 +31,16 @@ after the common code is injected. Scripts must define these variables
 8. [Draggable Behavior](#draggable-behavior)
 9. [Expand / Collapse / Resize](#expand--collapse--resize)
 10. [Network Interception](#network-interception)
-11. [War-Shared Helpers](#war-shared-helpers)
-12. [Stat Estimation](#stat-estimation)
-13. [Profile Cache](#profile-cache)
-14. [Member Data Processing](#member-data-processing)
-15. [Faction War Detection](#faction-war-detection)
-16. [Script Lifecycle Hooks](#script-lifecycle-hooks)
-17. [New Script Checklist](#new-script-checklist)
+11. [Stat Estimation](#stat-estimation)
+12. [Profile Cache](#profile-cache)
+13. [Cross-Origin HTTP](#cross-origin-http)
+14. [Profit Calculator](#profit-calculator)
+15. [Notifications](#notifications)
+16. [Member Data Processing](#member-data-processing)
+17. [War-Shared Helpers](#war-shared-helpers)
+18. [Faction War Detection](#faction-war-detection)
+19. [Script Lifecycle Hooks](#script-lifecycle-hooks)
+20. [New Script Checklist](#new-script-checklist)
 
 ---
 
@@ -218,9 +221,25 @@ Register with `window.addEventListener('resize', onResize)`.
 
 ### `hookFetch()`
 Wraps `window.fetch` to capture API keys from `api.torn.com` URLs.
+If the script defines a `handleApiPayload(url, data)` function,
+`hookFetch` will also clone responses from `api.torn.com`, parse
+the JSON, and pass it to `handleApiPayload`. URLs containing
+`_tpda=1` are skipped to avoid double-processing direct API calls.
 
 ### `hookXHR()`
 Wraps `XMLHttpRequest.open/send` to capture API keys.
+Like `hookFetch`, it also calls `handleApiPayload(url, data)` if
+defined by the script, skipping `_tpda=1` URLs.
+
+### `handleApiPayload(url, data)` *(optional hook)*
+Define this function in your script to receive parsed API response
+data from passively intercepted traffic. Called automatically by
+`hookFetch`/`hookXHR` for `api.torn.com` responses.
+
+> **Note:** Scripts that need to intercept non-API URLs (e.g., Strip
+> Poker intercepting all `torn.com` page requests) should override
+> `hookFetch`/`hookXHR` entirely. The script-specific function
+> declarations win over the common.js versions due to JS hoisting.
 
 > Call **both** immediately (before `init`) to capture PDA traffic:
 > ```js
@@ -260,6 +279,7 @@ Returns `https://www.torn.com/loader.php?sid=attack&user2ID={id}`.
 | Name | Description |
 |------|-------------|
 | `RANK_SCORES` | Map of rank name → numeric score (1-26) |
+| `RANK_STAT_MIDPOINTS` | Map of rank name → rough total battle stat midpoint |
 | `LEVEL_TRIGGERS` | Level thresholds for stat deduction |
 | `CRIMES_TRIGGERS` | Crime count thresholds |
 | `NW_TRIGGERS` | Networth thresholds |
@@ -267,9 +287,18 @@ Returns `https://www.torn.com/loader.php?sid=attack&user2ID={id}`.
 | `STAT_COLORS` | 7 hex colors matching ranges |
 | `STAT_MIDPOINTS` | Rough midpoint values for each range |
 
+### `rankToMidpoint(rank)`
+Returns the numeric midpoint from `RANK_STAT_MIDPOINTS` for a given
+rank string (e.g., `"Celebrity"` → `6300000`). Returns `null` if unknown.
+
+### `formatStatCompact(n)`
+Formats a large number compactly: `formatStatCompact(6300000)` → `"6.3M"`.
+Handles k, M, B suffixes.
+
 ### `estimateStats(rank, level, crimesTotal, networth)`
-Returns `{ label, color, idx }` or `null` if rank is unknown.
-Uses the TornPDA estimation algorithm.
+Returns `{ label, color, idx, midpoint }` or `null` if rank is unknown.
+Uses the TornPDA estimation algorithm. `midpoint` comes from
+`RANK_STAT_MIDPOINTS` for the specific rank.
 
 ---
 
@@ -290,6 +319,40 @@ Writes `STATE.profileCache` to storage.
 ### `fetchMemberProfile(memberId)`
 Fetches profile from Torn API (or returns cached). Stores
 `{ rank, level, crimesTotal, networth, estimate, fetchedAt }` in cache.
+
+---
+
+## Cross-Origin HTTP
+
+### `crossOriginGet(url)`
+Cross-origin GET helper for external APIs (e.g., TornW3B). Uses
+`PDA_httpGet` (Flutter native HTTP) in Torn PDA, falls back to
+plain `fetch()` in Tampermonkey (works when the server sends CORS
+headers). Returns parsed JSON.
+```js
+const data = await crossOriginGet('https://weav3r.dev/api/marketplace/206');
+```
+
+---
+
+## Profit Calculator
+
+### `calcDealProfit(buyPrice, sellPrice, taxPct, extraFees)`
+Returns `{ buyPrice, sellPrice, taxPct, taxAmount, extraFees, netProfit, roiPct }`
+or `null` if inputs are invalid. Reusable for any buy/sell/tax math.
+
+---
+
+## Notifications
+
+### `tpdaNotify(key, title, body, ttlMs)`
+Fires a browser `Notification` with duplicate suppression. Returns `true`
+if notification was shown, `false` if suppressed (same `key` within `ttlMs`,
+default 5 minutes). Automatically prunes old dedup entries.
+
+### `tpdaRequestNotifyPermission()`
+Requests browser notification permission if not yet granted.
+Safe to call repeatedly — no-ops if already `"granted"` or `"denied"`.
 
 ---
 
@@ -374,5 +437,7 @@ Called when panel closes. Use for scan cancellation, timer cleanup, etc.
 | Assistant | Blue `#4a90d9` | 999990 |
 | Deal Finder | Purple `#9b59b6` | 999980 |
 | War Bubble | Red `#d64545` | 999970 |
-| War Manager | Orange `#e67e22` | 999960 |
-| Strip Poker | Green `#27ae60` | 999950 |
+| Strip Poker | Green `#27ae60` | 999960 |
+| Bounty Filter | Orange `#e65100` | 999950 |
+| War Manager | Orange `#e67e22` | 999945 |
+| Market Sniper | Green `#2ecc40` | 999940 |

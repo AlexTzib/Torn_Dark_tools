@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - War Manager Bubble
+// @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
 // @version      1.3.2
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
@@ -54,7 +54,7 @@
     scanTotal: 0,
     ui: {
       minimized: true,
-      zIndexBase: 999960
+      zIndexBase: 999945
     },
     _logs: []
   };
@@ -1004,7 +1004,6 @@
     await detectEnemyFaction();
     window.addEventListener('resize', onResize);
     startPolling();
-    console.log('[War Manager Bubble] Started.');
     addLog('War Manager initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
     if (STATE.enemyFactionId && STATE.apiKey) {
       await refreshAll();

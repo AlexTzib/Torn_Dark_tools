@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Torn PDA - Plushie Prices
+// @name         Dark Tools - Plushie Prices
 // @namespace    alex.torn.pda.plushieprices.bubble
 // @version      2.6.0
 // @description  Fetches item market and bazaar floor prices for all 13 Torn plushies. Bazaar data via TornW3B. Shows a sortable table with best prices and set costs.
@@ -244,21 +244,6 @@
   /* ── network hooks are provided by common.js ────────────────── */
 
   /* ── cross-origin GET helper (PDA native → plain fetch) ───── */
-  async function crossOriginGet(url) {
-    /* PDA native HTTP — bypasses WebView restrictions entirely */
-    if (typeof PDA_httpGet === 'function') {
-      addLog('[W3B] using PDA_httpGet');
-      const r = await PDA_httpGet(url, {});
-      if (r && r.responseText) return JSON.parse(r.responseText);
-      throw new Error(`PDA_httpGet status ${r?.status || 'unknown'}`);
-    }
-    /* Plain fetch — works in Tampermonkey (weav3r.dev sends CORS: *) */
-    addLog('[W3B] using fetch');
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return resp.json();
-  }
-
   /* ── fetch plushie prices from Torn API ────────────────────── */
 
   async function fetchMarketData(itemId) {
@@ -453,7 +438,6 @@
     createPanel();
     window.addEventListener('resize', onResize);
     addLog('Plushie Prices initialized');
-    console.log('[Plushie Prices] Started.');
   }
 
   // Install network hooks immediately so we capture API keys from PDA traffic
