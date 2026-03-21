@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - Traveler Utility
 // @namespace    alex.torn.pda.traveler.bubble
-// @version      1.2.0
-// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Auto-expands destination on travel page (saves one click). Hospital timer, flight ETA, abroad shop links, Swiss Bank & Rehab info.
+// @version      1.3.0
+// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Auto-expands destination on travel page. Live hospital timer, live flight ETA, abroad shop links, Swiss Bank & Rehab info. Correct abroad detection when hospitalized.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -61,10 +61,12 @@
   function onPanelExpand() {
     fetchTravelStatus();
     startPolling();
+    startTickTimer();
   }
 
   function onPanelCollapse() {
     stopPolling();
+    stopTickTimer();
   }
 
   /* ── Polling ─────────────────────────────────────────────── */
@@ -81,6 +83,60 @@
     if (STATE.pollTimerId) {
       clearInterval(STATE.pollTimerId);
       STATE.pollTimerId = null;
+    }
+  }
+
+  /* ── 1-second countdown tick ────────────────────────────── */
+
+  let _tickTimerId = null;
+
+  function startTickTimer() {
+    stopTickTimer();
+    _tickTimerId = setInterval(tickCountdowns, 1000);
+  }
+
+  function stopTickTimer() {
+    if (_tickTimerId) {
+      clearInterval(_tickTimerId);
+      _tickTimerId = null;
+    }
+  }
+
+  function tickCountdowns() {
+    if (STATE.ui.minimized) return;
+
+    /* Hospital timer — count down from absolute until timestamp */
+    if (STATE.hospital.active) {
+      const remaining = Math.max(0, STATE.hospital.until - nowUnix());
+      const timerEl = document.getElementById('tpda-trav-hosp-timer');
+      if (timerEl) timerEl.textContent = formatSeconds(remaining);
+      const barEl = document.getElementById('tpda-trav-hosp-bar');
+      if (barEl) {
+        const pct = remaining > 0 ? Math.max(0, Math.min(100, 100 - (remaining / (5 * 3600)) * 100)) : 100;
+        barEl.style.width = pct + '%';
+      }
+      if (remaining <= 0) {
+        STATE.hospital = { active: false, until: 0, description: '' };
+        renderPanel();
+        return;
+      }
+    }
+
+    /* Flight ETA — subtract elapsed since last fetch */
+    if (STATE.location === 'traveling' && STATE.travel && STATE.lastFetchTs) {
+      const elapsed = Math.floor((Date.now() - STATE.lastFetchTs) / 1000);
+      const timeLeft = Math.max(0, (STATE.travel.time_left || 0) - elapsed);
+      const etaEl = document.getElementById('tpda-trav-flight-eta');
+      if (etaEl) etaEl.textContent = formatSeconds(timeLeft);
+      const barEl = document.getElementById('tpda-trav-flight-bar');
+      if (barEl) {
+        const maxSec = Number(barEl.dataset.max) || (45 * 60);
+        const pct = Math.max(0, Math.min(100, 100 - (timeLeft / maxSec) * 100));
+        barEl.style.width = pct + '%';
+      }
+      if (timeLeft <= 0) {
+        fetchTravelStatus();
+      }
     }
   }
 
@@ -135,11 +191,17 @@
       STATE.location = 'traveling';
       STATE.abroadCountry = travel.destination || '';
       addLog(`Traveling to ${STATE.abroadCountry}, ${travel.time_left}s remaining`);
+    } else if (travel && travel.destination && travel.time_left === 0) {
+      /* Arrived abroad — travel.destination is non-empty, time_left is 0.
+         This works even when hospitalized abroad (status.state = "Hospital"). */
+      STATE.location = 'abroad';
+      STATE.abroadCountry = travel.destination || 'Unknown';
+      addLog(`Abroad in ${STATE.abroadCountry}`);
     } else if (/abroad/.test(String(statusState || '').toLowerCase()) ||
                /^in\s(mexico|canada|cayman|hawaii|uk|argentina|switzerland|japan|china|uae|south africa)/i.test(statusDesc)) {
       STATE.location = 'abroad';
       STATE.abroadCountry = travel?.destination || extractCountryFromStatus(statusDesc) || 'Unknown';
-      addLog(`Abroad in ${STATE.abroadCountry}`);
+      addLog(`Abroad in ${STATE.abroadCountry} (status-based)`);
     } else if (/traveling|travelling|in flight/i.test(statusDesc)) {
       STATE.location = 'traveling';
       STATE.abroadCountry = travel?.destination || '';
@@ -386,9 +448,9 @@
         </div>
         ${remaining > 0 ? `
           <div style="background:#2f3340;border-radius:6px;overflow:hidden;height:16px;margin-bottom:6px;">
-            <div style="background:#f44;height:100%;width:${pct}%;transition:width 0.5s;"></div>
+            <div id="tpda-trav-hosp-bar" style="background:#f44;height:100%;width:${pct}%;transition:width 1s linear;"></div>
           </div>
-          <div style="text-align:center;font-size:16px;font-weight:bold;color:#ffd700;">${formatSeconds(remaining)}</div>
+          <div id="tpda-trav-hosp-timer" style="text-align:center;font-size:16px;font-weight:bold;color:#ffd700;">${formatSeconds(remaining)}</div>
           <div style="text-align:center;font-size:11px;color:#888;margin-top:2px;">until release</div>
         ` : `
           <div style="text-align:center;font-size:14px;color:#4caf50;font-weight:bold;">Released!</div>
@@ -501,9 +563,9 @@
       const pct = Math.max(0, Math.min(100, 100 - (timeLeft / maxSec) * 100));
       html += `
         <div style="background:#2f3340;border-radius:6px;overflow:hidden;height:20px;margin-bottom:8px;">
-          <div style="background:${color};height:100%;width:${pct}%;transition:width 0.5s;"></div>
+          <div id="tpda-trav-flight-bar" data-max="${maxSec}" style="background:${color};height:100%;width:${pct}%;transition:width 1s linear;"></div>
         </div>
-        <div style="text-align:center;font-size:16px;font-weight:bold;color:#ffd700;">${formatSeconds(timeLeft)}</div>
+        <div id="tpda-trav-flight-eta" style="text-align:center;font-size:16px;font-weight:bold;color:#ffd700;">${formatSeconds(timeLeft)}</div>
         <div style="text-align:center;font-size:11px;color:#888;margin-top:2px;">until arrival</div>`;
     } else {
       html += `<div style="text-align:center;font-size:14px;color:#4caf50;font-weight:bold;">Arriving now!</div>`;
