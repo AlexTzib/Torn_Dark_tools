@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.6.0
+// @version      1.6.1
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -46,10 +46,11 @@
     pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
     thresholdPct: loadThresholdPct(),
-    reportCollapsed: {},   // sectionKey → boolean (collapsed state for report sections)
+    reportCollapsed: { inTorn: false, hospital: true, abroad: true, offlineRecent: true, offlineOld: true },
     selectedMemberId: null, // currently selected own-faction member for target list
     assignments: [],       // { own, enemy } pairs
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
+    _copyTexts: {},        // numeric id → copy text string (avoids putting long text in data attributes)
     scanning: false,
     scanProgress: 0,
     scanTotal: 0,
@@ -506,16 +507,32 @@
       if (toggle) {
         const key = toggle.dataset.section;
         if (key) {
-          STATE.reportCollapsed[key] = !STATE.reportCollapsed[key];
+          const current = STATE.reportCollapsed[key] === true;
+          STATE.reportCollapsed[key] = !current;
           renderPanel();
         }
         return;
       }
 
-      // Copy buttons
+      // Collapse All / Expand All
+      const collapseAll = e.target.closest('.tpda-mgr-collapse-all');
+      if (collapseAll) {
+        for (const k of ['inTorn', 'hospital', 'abroad', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = true;
+        renderPanel();
+        return;
+      }
+      const expandAll = e.target.closest('.tpda-mgr-expand-all');
+      if (expandAll) {
+        for (const k of ['inTorn', 'hospital', 'abroad', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = false;
+        renderPanel();
+        return;
+      }
+
+      // Copy buttons (text stored in STATE._copyTexts map to avoid huge data attributes)
       const copyBtn = e.target.closest('.tpda-mgr-copy-btn');
       if (copyBtn) {
-        const text = copyBtn.dataset.copy;
+        const cid = copyBtn.dataset.copyId;
+        const text = cid ? STATE._copyTexts[cid] : copyBtn.dataset.copy;
         if (text) copyToClipboard(text, copyBtn);
         return;
       }
@@ -532,9 +549,16 @@
 
   /* ── Rendering ──────────────────────────────────────────────── */
 
+  let _copyIdCounter = 0;
+  function registerCopyText(text) {
+    const id = String(++_copyIdCounter);
+    STATE._copyTexts[id] = text;
+    return id;
+  }
+
   let _rafId = null;
   function renderPanel() {
-    if (_rafId) return;
+    if (_rafId) cancelAnimationFrame(_rafId);
     _rafId = requestAnimationFrame(() => {
       _rafId = null;
       _renderPanelNow();
@@ -544,6 +568,8 @@
   function _renderPanelNow() {
     const body = document.getElementById('tpda-war-mgr-body');
     if (!body) return;
+    STATE._copyTexts = {};
+    _copyIdCounter = 0;
 
     const ownOnline = STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn');
     const enemyOnline = STATE.enemyMembers.filter(m => m.isOnline);
@@ -641,7 +667,11 @@
     const enriched = enrichWithStats(ownOnline);
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">Pick Attacker (${ownOnline.length} online)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-weight:bold;">Pick Attacker (${ownOnline.length} online)</div>
+          <button class="tpda-mgr-report-refresh"
+                  style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
+        </div>
         <div style="font-size:11px;color:#888;margin-bottom:6px;">Select a faction member to build their personal target list</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:110px;overflow-y:auto;">
           ${enriched.map(m => {
@@ -666,6 +696,7 @@
     if (!own) return '';
     const ownEnriched = enrichWithStats([own])[0];
     const targets = getSelectedMemberTargets();
+    const listCopyId = registerCopyText(generateSelectedTargetMessages());
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #e67e22;border-radius:10px;background:#1f1a12;">
@@ -676,7 +707,7 @@
             <span style="color:#888;font-weight:normal;font-size:11px;"> @ ${STATE.thresholdPct}%</span>
           </div>
           <div style="display:flex;gap:6px;">
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateSelectedTargetMessages())}"
+            <button class="tpda-mgr-copy-btn" data-copy-id="${listCopyId}"
                     style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy List
             </button>
@@ -696,6 +727,7 @@
           if (e.locationBucket === 'hospital' && e.remainingSec != null) {
             hospNote = `<div style="font-size:11px;color:#ffd166;">\u23F0 Out of hospital in ${formatSeconds(e.remainingSec)}</div>`;
           }
+          const tgtCopyId = registerCopyText(`${own.name} get ${e.name} ${est ? '[' + est.label + ']' : ''} ${profileUrl(e.id)}${e.locationBucket === 'hospital' && e.remainingSec != null ? ' (hospital, out in ' + formatSeconds(e.remainingSec) + ')' : ''}`);
           return `
             <div style="padding:6px 0;border-top:1px solid #3a3020;">
               <div>
@@ -710,7 +742,7 @@
                    style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Attack</a>
                 <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
                    style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Profile</a>
-                <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(`${own.name} get ${e.name} ${est ? '[' + est.label + ']' : ''} ${profileUrl(e.id)}${e.locationBucket === 'hospital' && e.remainingSec != null ? ' (hospital, out in ' + formatSeconds(e.remainingSec) + ')' : ''}`)}"
+                <button class="tpda-mgr-copy-btn" data-copy-id="${tgtCopyId}"
                         style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy</button>
               </div>
             </div>`;
@@ -720,16 +752,18 @@
   }
 
   function renderAssignmentsCard() {
+    const compactId = registerCopyText(generateCompactMessages());
+    const detailedId = registerCopyText(generateAssignmentMessages());
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div style="font-weight:bold;">\uD83C\uDFAF Target Assignments (${STATE.assignments.length})</div>
           <div style="display:flex;gap:6px;">
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateCompactMessages())}"
+            <button class="tpda-mgr-copy-btn" data-copy-id="${compactId}"
                     style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy Compact
             </button>
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateAssignmentMessages())}"
+            <button class="tpda-mgr-copy-btn" data-copy-id="${detailedId}"
                     style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy Detailed
             </button>
@@ -836,14 +870,14 @@
 
   function renderReportSection(section) {
     if (!section.members.length) return '';
-    const collapsed = !!STATE.reportCollapsed[section.key];
+    const collapsed = STATE.reportCollapsed[section.key] === true;
     const arrow = collapsed ? '\u25B6' : '\u25BC';
-    const copyText = generateSectionText(section.members);
+    const copyId = registerCopyText(generateSectionText(section.members));
 
     let html = `<div style="margin-top:6px;">`;
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;">`;
-    html += `<div class="tpda-mgr-report-toggle" data-section="${section.key}" style="font-size:11px;color:${section.color};font-weight:bold;cursor:pointer;user-select:none;">${arrow} ${escapeHtml(section.title)} (${section.members.length})</div>`;
-    html += `<button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(copyText)}" style="font-size:10px;background:${section.color};color:#000;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;">Copy</button>`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 6px;border-radius:6px;background:${collapsed ? '#1a1d26' : 'transparent'};">`;
+    html += `<div class="tpda-mgr-report-toggle" data-section="${section.key}" style="font-size:12px;color:${section.color};font-weight:bold;cursor:pointer;user-select:none;flex:1;padding:2px 0;">${arrow} ${escapeHtml(section.title)} (${section.members.length})</div>`;
+    html += `<button class="tpda-mgr-copy-btn" data-copy-id="${copyId}" style="font-size:10px;background:${section.color};color:#000;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;">Copy</button>`;
     html += `</div>`;
     if (!collapsed) {
       html += section.members.map(renderReportRow).join('');
@@ -874,11 +908,19 @@
     const enriched = enrichWithStats(all).sort((a, b) => a.midpoint - b.midpoint);
     const sections = buildReportSections(enriched);
     const onlineCount = all.filter(m => m.isOnline).length;
+    const scannedCount = all.filter(m => STATE.profileCache[m.id]?.estimate).length;
+    const copyAllId = registerCopyText(generateFullReport());
 
     let rows = '';
     for (const s of sections) {
       rows += renderReportSection(s);
     }
+
+    const scanHint = scannedCount === 0
+      ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan All Stats" to see strength estimates</div>`
+      : scannedCount < all.length
+        ? `<div style="font-size:10px;color:#888;margin-top:4px;">${scannedCount}/${all.length} scanned</div>`
+        : '';
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
@@ -888,12 +930,17 @@
             <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
             <button class="tpda-mgr-report-refresh"
                     style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateFullReport())}"
+            <button class="tpda-mgr-copy-btn" data-copy-id="${copyAllId}"
                     style="font-size:11px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy All
             </button>
           </div>
         </div>
+        <div style="display:flex;gap:4px;margin-bottom:6px;">
+          <button class="tpda-mgr-expand-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Expand All</button>
+          <button class="tpda-mgr-collapse-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Collapse All</button>
+        </div>
+        ${scanHint}
         <div style="max-height:350px;overflow-y:auto;">
           ${rows}
         </div>
@@ -992,6 +1039,8 @@
         ? '<span style="color:#4caf50;">Online</span>'
         : `<span style="color:#888;">Last action: ${escapeHtml(enemy.relative)}</span>`;
 
+      const rowCopyId = registerCopyText(`${own.name} \u2192 ${enemy.name} ${enemy.estimate ? '[' + enemy.estimate.label + ']' : ''} ${profileUrl(enemy.id)}${enemy.locationBucket === 'hospital' && enemy.remainingSec != null ? ' (hospital, out in ' + formatSeconds(enemy.remainingSec) + ')' : ''}`);
+
       return `
         <div class="mgr-assign">
           <div>
@@ -1012,7 +1061,7 @@
                style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">
               Profile
             </a>
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(`${own.name} \u2192 ${enemy.name} ${enemy.estimate ? '[' + enemy.estimate.label + ']' : ''} ${profileUrl(enemy.id)}${enemy.locationBucket === 'hospital' && enemy.remainingSec != null ? ' (hospital, out in ' + formatSeconds(enemy.remainingSec) + ')' : ''}`)}"
+            <button class="tpda-mgr-copy-btn" data-copy-id="${rowCopyId}"
                     style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
               Copy
             </button>
