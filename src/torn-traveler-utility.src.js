@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - Traveler Utility
 // @namespace    alex.torn.pda.traveler.bubble
-// @version      1.3.0
-// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Auto-expands destination on travel page. Live hospital timer, live flight ETA, abroad shop links, Swiss Bank & Rehab info. Correct abroad detection when hospitalized.
+// @version      1.4.0
+// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Learns actual flight times (PI-aware). Auto-expands destination on travel page. Live hospital timer, live flight ETA, abroad shop links, Swiss Bank & Rehab info.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -43,6 +43,7 @@
     location: 'torn', /* 'torn' | 'abroad' | 'traveling' | 'unknown' */
     abroadCountry: '', /* e.g. 'Mexico' if currently abroad */
     hospital: { active: false, until: 0, description: '' },
+    flightTimes: {},  /* destination → total seconds (learned from actual flights) */
     lastFetchTs: 0,
     lastError: '',
     fetching: false,
@@ -140,6 +141,37 @@
     }
   }
 
+  /* ── Flight time helpers ────────────────────────────────── */
+
+  const FLIGHT_TIMES_KEY = SCRIPT_KEY + '_flight_times';
+
+  function loadFlightTimes() {
+    STATE.flightTimes = getStorage(FLIGHT_TIMES_KEY, {});
+  }
+
+  function saveFlightTimes() {
+    setStorage(FLIGHT_TIMES_KEY, STATE.flightTimes);
+  }
+
+  function destToKey(destName) {
+    const lower = String(destName || '').toLowerCase();
+    const match = COUNTRIES.find(c => lower.includes(c.id));
+    return match ? match.id : lower.replace(/\s+/g, '_');
+  }
+
+  function getActualFlyTime(countryId) {
+    return STATE.flightTimes[countryId] || null;
+  }
+
+  function formatFlySeconds(sec) {
+    if (sec >= 3600) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.round((sec % 3600) / 60);
+      return m > 0 ? h + 'h ' + m + 'min' : h + 'h';
+    }
+    return Math.round(sec / 60) + ' min';
+  }
+
   /* ── Travel status fetch ─────────────────────────────────── */
 
   async function fetchTravelStatus() {
@@ -190,6 +222,17 @@
     if (travel && travel.time_left > 0) {
       STATE.location = 'traveling';
       STATE.abroadCountry = travel.destination || '';
+
+      /* Learn actual flight time: total = elapsed + remaining */
+      if (travel.departed > 0 && travel.destination) {
+        const totalSec = nowUnix() - travel.departed + travel.time_left;
+        const destKey = destToKey(travel.destination);
+        if (totalSec > 0 && totalSec < 4 * 3600) {
+          STATE.flightTimes[destKey] = totalSec;
+          saveFlightTimes();
+        }
+      }
+
       addLog(`Traveling to ${STATE.abroadCountry}, ${travel.time_left}s remaining`);
     } else if (travel && travel.destination && travel.time_left === 0) {
       /* Arrived abroad — travel.destination is non-empty, time_left is 0.
@@ -475,11 +518,13 @@
     html += `<div style="font-size:11px;color:#888;margin-bottom:8px;">Tap a destination to open the travel agency page.</div>`;
 
     for (const c of COUNTRIES) {
+      const actualSec = getActualFlyTime(c.id);
+      const timeLabel = actualSec ? formatFlySeconds(actualSec) : c.flyTime;
       html += `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;margin-bottom:6px;border:1px solid #2f3340;border-radius:8px;background:#1a1d26;">
           <div>
             <div style="font-weight:bold;color:${c.color};">${c.flag} ${escapeHtml(c.name)}</div>
-            <div style="font-size:11px;color:#888;">${escapeHtml(c.items)} \u2022 ${escapeHtml(c.flyTime)}</div>
+            <div style="font-size:11px;color:#888;">${escapeHtml(c.items)} \u2022 ${escapeHtml(timeLabel)}</div>
           </div>
           <a href="${escapeHtml(TRAVEL_URL + '#tpda_fly=' + c.id)}" class="tpda-trav-fly tpda-trav-btn" data-dest="${escapeHtml(c.id)}"
              style="background:${c.color};">
@@ -556,10 +601,17 @@
     html += `<div style="font-weight:bold;color:${color};margin-bottom:8px;">\u2708\uFE0F Flying to ${escapeHtml(dest)}</div>`;
 
     if (timeLeft > 0) {
-      /* Dynamic max for progress bar — use known fly time or fall back to 3h */
-      const maxSec = country && /(\d+)h/.test(country.flyTime)
-        ? parseInt(RegExp.$1) * 3600 + ((/(\d+)min/.test(country.flyTime)) ? parseInt(RegExp.$1) * 60 : 0)
-        : (country ? 45 * 60 : 3 * 3600);
+      /* Use actual learned flight time for progress bar, or compute from departed */
+      let maxSec;
+      const destKey = destToKey(dest);
+      const actualTotal = getActualFlyTime(destKey);
+      if (actualTotal) {
+        maxSec = actualTotal;
+      } else if (STATE.travel?.departed > 0) {
+        maxSec = nowUnix() - STATE.travel.departed + timeLeft;
+      } else {
+        maxSec = country ? 45 * 60 : 3 * 3600;
+      }
       const pct = Math.max(0, Math.min(100, 100 - (timeLeft / maxSec) * 100));
       html += `
         <div style="background:#2f3340;border-radius:6px;overflow:hidden;height:20px;margin-bottom:8px;">
@@ -643,6 +695,7 @@
 
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
+    loadFlightTimes();
     ensureStyles();
     createBubble();
     createPanel();
