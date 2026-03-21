@@ -592,27 +592,31 @@
   const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
 
+  function matchRank(rank) {
+    if (!rank) return 0;
+    const r = String(rank).trim();
+    if (RANK_SCORES[r]) return RANK_SCORES[r];
+    const lower = r.toLowerCase();
+    for (const [name, score] of Object.entries(RANK_SCORES)) {
+      if (lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)) return score;
+    }
+    return 0;
+  }
+
   function estimateStats(rank, level, crimesTotal, networth) {
-    const rs = RANK_SCORES[rank];
-    if (!rs) return null;
-    /* Torn rank is directly determined by total battle stats.
-       Map rank brackets to our 7 display ranges based on
-       community-sourced rank ↔ stat correlations:
-         rs  1      →  < 2k          (Absolute beginner)
-         rs  2-4    →  2k - 25k      (Beginner … Rookie)
-         rs  5-9    →  20k - 250k    (Novice … Above average)
-         rs 10-15   →  200k - 2.5M   (Competent … Professional)
-         rs 16-20   →  2M - 25M      (Star … Supreme)
-         rs 21-24   →  20M - 250M    (Idolized … Legendary)
-         rs 25-26   →  > 200M        (Elite, Invincible)       */
-    const idx = rs <= 1  ? 0
-              : rs <= 4  ? 1
-              : rs <= 9  ? 2
-              : rs <= 15 ? 3
-              : rs <= 20 ? 4
-              : rs <= 24 ? 5
-              :            6;
-    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx, midpoint: RANK_STAT_MIDPOINTS[rank] || STAT_MIDPOINTS[idx] };
+    const rankIndex = matchRank(rank);
+    if (!rankIndex) return null;
+    /* Algorithm from Torn PDA StatsCalculator.calculateStats():
+       Rank is a composite of battle stats + level + crimes + networth.
+       Subtract the non-stat contributions to isolate actual battle stats.
+       Higher level/crimes/networth for the same rank = lower real stats. */
+    const levelIndex = LEVEL_TRIGGERS.reduce((acc, t) => (level >= t ? acc + 1 : acc), 0);
+    const crimeIndex = CRIMES_TRIGGERS.reduce((acc, t) => (crimesTotal >= t ? acc + 1 : acc), 0);
+    const nwIndex    = NW_TRIGGERS.reduce((acc, t) => (networth >= t ? acc + 1 : acc), 0);
+    const finalIndex = rankIndex - levelIndex - crimeIndex - nwIndex - 1;
+    const idx = Math.max(0, Math.min(6, finalIndex));
+    const matchedRankName = Object.entries(RANK_SCORES).find(([, v]) => v === rankIndex)?.[0] || rank;
+    return { label: STAT_RANGES[idx], color: STAT_COLORS[idx], idx, midpoint: RANK_STAT_MIDPOINTS[matchedRankName] || STAT_MIDPOINTS[idx] };
   }
 
   /* ── Profile cache ─────────────────────────────────────────── */
@@ -637,16 +641,22 @@
     if (!STATE.apiKey) return null;
 
     try {
-      const url = `https://api.torn.com/user/${encodeURIComponent(memberId)}?selections=profile,personalstats,criminalrecord&key=${encodeURIComponent(STATE.apiKey)}`;
-      const res = await fetch(url, { method: 'GET' });
-      const data = await res.json();
+      const url = `https://api.torn.com/user/${encodeURIComponent(memberId)}?selections=profile,personalstats,criminalrecord&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
+      let data;
+      if (typeof PDA_httpGet === 'function') {
+        const resp = await PDA_httpGet(url, {});
+        data = safeJsonParse(resp?.responseText);
+      } else {
+        const r = await fetch(url, { method: 'GET' });
+        data = await r.json();
+      }
       if (data?.error) {
-        addLog(`Profile ${memberId}: API error ${data.error.code || ''}`);
+        addLog(`Profile ${memberId}: API error ${data.error.code || data.error.error || ''}`);
         return null;
       }
 
       const crimesTotal = (() => {
-        const cr = data.criminalrecord;
+        const cr = data.criminalrecord || data.profile?.criminalrecord;
         if (!cr || typeof cr !== 'object') return 0;
         let sum = 0;
         for (const v of Object.values(cr)) sum += Number(v) || 0;
@@ -654,13 +664,16 @@
       })();
 
       const profile = {
-        rank: data.rank || '',
-        level: data.level || 0,
+        rank: data.rank || data.profile?.rank || '',
+        level: data.level || data.profile?.level || 0,
         crimesTotal,
-        networth: data.personalstats?.networth || 0,
+        networth: data.personalstats?.networth || data.profile?.personalstats?.networth || 0,
         fetchedAt: nowTs()
       };
       profile.estimate = estimateStats(profile.rank, profile.level, profile.crimesTotal, profile.networth);
+      if (!profile.estimate && profile.rank) {
+        addLog(`Profile ${memberId}: rank "${profile.rank}" not recognized`);
+      }
       STATE.profileCache[memberId] = profile;
       return profile;
     } catch (err) {
