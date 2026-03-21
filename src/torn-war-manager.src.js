@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.5.0
+// @version      1.6.0
 // @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -46,6 +46,7 @@
     pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
     thresholdPct: loadThresholdPct(),
+    reportCollapsed: {},   // sectionKey → boolean (collapsed state for report sections)
     selectedMemberId: null, // currently selected own-faction member for target list
     assignments: [],       // { own, enemy } pairs
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
@@ -500,6 +501,17 @@
         return;
       }
 
+      // Report section collapse/expand toggle
+      const toggle = e.target.closest('.tpda-mgr-report-toggle');
+      if (toggle) {
+        const key = toggle.dataset.section;
+        if (key) {
+          STATE.reportCollapsed[key] = !STATE.reportCollapsed[key];
+          renderPanel();
+        }
+        return;
+      }
+
       // Copy buttons
       const copyBtn = e.target.closest('.tpda-mgr-copy-btn');
       if (copyBtn) {
@@ -547,7 +559,7 @@
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
       ${renderMemberSelector(ownOnline)}
       ${renderSelectedTargetList()}
-      ${renderOnlineEnemyReport(enemyOnline)}
+      ${renderEnemyReport()}
       ${renderAssignmentsCard()}
       ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy')}
       ${renderLogCard()}
@@ -727,8 +739,8 @@
       </div>`;
   }
 
-  function generateOnlineReport(enemies) {
-    const enriched = enrichWithStats(enemies);
+  function generateSectionText(members) {
+    const enriched = enrichWithStats(members);
     return enriched.map(e => {
       const est = e.estimate;
       const tag = est ? ` [${est.label}]` : '';
@@ -741,6 +753,8 @@
         status = ` — Jail ${formatSeconds(e.remainingSec)}`;
       } else if (e.locationLabel && e.locationBucket !== 'torn') {
         status = ` — ${e.locationLabel}`;
+      } else if (!e.isOnline) {
+        status = ` — Offline ${e.relative || ''}`;
       } else {
         status = ' — OK';
       }
@@ -748,89 +762,139 @@
     }).join('\n');
   }
 
-  function renderOnlineEnemyReport(enemyOnline) {
-    const lastFetchLabel = STATE.lastFetchTs ? ageText(STATE.lastFetchTs) : 'never';
+  function generateFullReport() {
+    const all = STATE.enemyMembers;
+    if (!all.length) return '';
+    const enriched = enrichWithStats(all).sort((a, b) => a.midpoint - b.midpoint);
+    const sections = buildReportSections(enriched);
+    const lines = [];
+    for (const s of sections) {
+      if (!s.members.length) continue;
+      lines.push(`=== ${s.title} (${s.members.length}) ===`);
+      lines.push(generateSectionText(s.members));
+      lines.push('');
+    }
+    return lines.join('\n').trim();
+  }
 
-    if (!enemyOnline.length) {
+  function buildReportSections(enriched) {
+    return [
+      {
+        key: 'inTorn', title: 'In Torn', color: '#4caf50', border: '#4caf50',
+        members: enriched.filter(e => e.isOnline && e.locationBucket === 'torn')
+      },
+      {
+        key: 'hospital', title: 'Hospital / Other', color: '#ffc107', border: '#ffc107',
+        members: enriched.filter(e => e.isOnline && e.locationBucket !== 'torn' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling')
+      },
+      {
+        key: 'abroad', title: 'Abroad / Traveling', color: '#42a5f5', border: '#42a5f5',
+        members: enriched.filter(e => e.isOnline && (e.locationBucket === 'abroad' || e.locationBucket === 'traveling'))
+      },
+      {
+        key: 'offlineRecent', title: 'Offline < 1 hour', color: '#aaa', border: '#555',
+        members: enriched.filter(e => !e.isOnline && e.minutes < 60)
+      },
+      {
+        key: 'offlineOld', title: 'Offline > 1 hour', color: '#666', border: '#333',
+        members: enriched.filter(e => !e.isOnline && e.minutes >= 60)
+      }
+    ];
+  }
+
+  function renderReportRow(e) {
+    const est = e.estimate;
+    let timerNote = '';
+    if (e.remainingSec != null) {
+      const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
+      const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
+      const col = timerColors[e.locationBucket] || '#aaa';
+      const icon = timerIcons[e.locationBucket] || '\u23F0';
+      timerNote = ` <span style="color:${col};font-size:11px;">${icon} ${formatSeconds(e.remainingSec)}</span>`;
+    }
+    const statusColor = e.isOnline ? '#4caf50' : '#888';
+    const statusDot = e.isOnline ? '\uD83D\uDFE2' : '\u26AA';
+    const offlineInfo = !e.isOnline && e.relative ? ` <span style="color:#666;font-size:10px;">${escapeHtml(e.relative)}</span>` : '';
+    return `
+      <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+        <div>
+          <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
+          <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
+          ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
+          ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
+          <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
+          ${timerNote}${offlineInfo}
+        </div>
+        <div style="display:flex;gap:4px;">
+          <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
+             style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Attack</a>
+          <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
+             style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Profile</a>
+        </div>
+      </div>`;
+  }
+
+  function renderReportSection(section) {
+    if (!section.members.length) return '';
+    const collapsed = !!STATE.reportCollapsed[section.key];
+    const arrow = collapsed ? '\u25B6' : '\u25BC';
+    const copyText = generateSectionText(section.members);
+
+    let html = `<div style="margin-top:6px;">`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;">`;
+    html += `<div class="tpda-mgr-report-toggle" data-section="${section.key}" style="font-size:11px;color:${section.color};font-weight:bold;cursor:pointer;user-select:none;">${arrow} ${escapeHtml(section.title)} (${section.members.length})</div>`;
+    html += `<button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(copyText)}" style="font-size:10px;background:${section.color};color:#000;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;">Copy</button>`;
+    html += `</div>`;
+    if (!collapsed) {
+      html += section.members.map(renderReportRow).join('');
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function renderEnemyReport() {
+    const lastFetchLabel = STATE.lastFetchTs ? ageText(STATE.lastFetchTs) : 'never';
+    const all = STATE.enemyMembers;
+
+    if (!all.length) {
       return `
         <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <div style="font-weight:bold;">\uD83D\uDFE2 Enemy Online Report</div>
+            <div style="font-weight:bold;">\uD83D\uDFE2 Enemy Report</div>
             <div style="display:flex;gap:4px;align-items:center;">
               <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
               <button class="tpda-mgr-report-refresh"
                       style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
             </div>
           </div>
-          <div class="mgr-muted">No enemy members currently online.</div>
+          <div class="mgr-muted">No enemy members found.</div>
         </div>`;
     }
 
-    const enriched = enrichWithStats(enemyOnline).sort((a, b) => a.midpoint - b.midpoint);
-    const inTorn = enriched.filter(e => e.locationBucket === 'torn');
-    const abroad = enriched.filter(e => e.locationBucket === 'abroad' || e.locationBucket === 'traveling');
-    const other = enriched.filter(e => e.locationBucket !== 'torn' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling');
-
-    function renderRow(e) {
-      const est = e.estimate;
-      let timerNote = '';
-      if (e.remainingSec != null) {
-        const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
-        const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
-        const col = timerColors[e.locationBucket] || '#aaa';
-        const icon = timerIcons[e.locationBucket] || '\u23F0';
-        timerNote = ` <span style="color:${col};font-size:11px;">${icon} ${formatSeconds(e.remainingSec)}</span>`;
-      }
-      const statusColor = e.isOnline ? '#4caf50' : '#888';
-      const statusDot = e.isOnline ? '\uD83D\uDFE2' : '\u26AA';
-      return `
-        <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-          <div>
-            <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
-            <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
-            ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
-            ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
-            <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
-            ${timerNote}
-          </div>
-          <div style="display:flex;gap:4px;">
-            <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
-               style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Attack</a>
-            <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
-               style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Profile</a>
-          </div>
-        </div>`;
-    }
+    const enriched = enrichWithStats(all).sort((a, b) => a.midpoint - b.midpoint);
+    const sections = buildReportSections(enriched);
+    const onlineCount = all.filter(m => m.isOnline).length;
 
     let rows = '';
-    if (inTorn.length) {
-      rows += `<div style="font-size:11px;color:#4caf50;font-weight:bold;margin:6px 0 2px;">In Torn (${inTorn.length})</div>`;
-      rows += inTorn.map(renderRow).join('');
-    }
-    if (other.length) {
-      rows += `<div style="font-size:11px;color:#ffc107;font-weight:bold;margin:6px 0 2px;">Hospital / Other (${other.length})</div>`;
-      rows += other.map(renderRow).join('');
-    }
-    if (abroad.length) {
-      rows += `<div style="font-size:11px;color:#42a5f5;font-weight:bold;margin:6px 0 2px;">Abroad / Traveling (${abroad.length})</div>`;
-      rows += abroad.map(renderRow).join('');
+    for (const s of sections) {
+      rows += renderReportSection(s);
     }
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
-          <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Online Report (${enemyOnline.length})</div>
+          <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Report (${onlineCount} online / ${all.length} total)</div>
           <div style="display:flex;gap:4px;align-items:center;">
             <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
             <button class="tpda-mgr-report-refresh"
                     style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
-            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateOnlineReport(enemyOnline))}"
+            <button class="tpda-mgr-copy-btn" data-copy="${escapeHtml(generateFullReport())}"
                     style="font-size:11px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Copy List
+              Copy All
             </button>
           </div>
         </div>
-        <div style="max-height:250px;overflow-y:auto;">
+        <div style="max-height:350px;overflow-y:auto;">
           ${rows}
         </div>
       </div>`;
