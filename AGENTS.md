@@ -82,38 +82,119 @@ Torn_Dark_tools/
    - Replaces the literal string `###PDA-APIKEY###` in the script source with the user's actual Torn API key
    - If the script has a custom API key configured in PDA settings, that key is used instead
    - Wraps the script in an IIFE: `(function() { ...script... }());`
+   - Normalizes curly/smart quotes to straight quotes (prevents copy-paste issues)
 3. Scripts are injected at `DOCUMENT_START` time.
+
+### PDA Handler Injection Order
+
+PDA injects these handlers in this exact order, all at `DOCUMENT_START`, BEFORE any userscripts:
+
+1. **`handler_tabContext(tabUid)`** — Sets `window.__tornpda.tab.uid` (read-only) and `window.__tornpda.tab.state`
+2. **`handler_flutterPlatformReady()`** — Creates `__PDA_platformReadyPromise` that resolves when Flutter bridge is ready
+3. **`handler_pdaAPI()`** — Defines `PDA_httpGet()` and `PDA_httpPost()`
+4. **`handler_GM()`** — Defines all GM_* compatibility functions (by Kwack [2190604])
+5. **`handler_evaluateJS()`** — Defines `PDA_evaluateJavascript()` (eval replacement)
+6. **User scripts** — Each wrapped in IIFE, API key replaced
 
 ### PDA-Provided JavaScript Globals
 
-PDA injects several handler scripts before userscripts run:
-
 | Global | Purpose | Notes |
 |---|---|---|
-| `PDA_httpGet(url, headers)` | Makes a native HTTP GET request through Flutter (bypasses WebView CORS) | Returns a Promise with `{ responseHeaders, responseText, status, statusText }`. Has a 2-second dedup per URL. |
-| `PDA_httpPost(url, headers, body)` | Native HTTP POST through Flutter | Same return shape as `PDA_httpGet`. 2-second dedup. |
-| `PDA_evaluateJavascript(source)` | Evaluates JS source code in the WebView context | Useful for dynamically loaded code (eval is blocked by Torn's CSP). |
-| `window.__tornpda.tab.uid` | Unique ID for the current PDA tab | Read-only. |
-| `GM_getValue`, `GM_setValue`, etc. | GreaseMonkey API compatibility layer | Uses `localStorage` under the hood. Provided by PDA's `handler_GM()`. |
-| `GM.xmlHttpRequest` | GreaseMonkey XHR compatibility | Routes through `PDA_httpGet`/`PDA_httpPost` internally. |
+| `PDA_httpGet(url, headers)` | Native HTTP GET via Flutter (bypasses WebView CORS) | Returns Promise with `{ responseHeaders, responseText, status, statusText }`. **2-second dedup keyed by URL only** (headers ignored for dedup). Silently returns `undefined` if deduped. |
+| `PDA_httpPost(url, headers, body)` | Native HTTP POST via Flutter | Same return shape. **2-second dedup keyed by url+headers+body**. |
+| `PDA_evaluateJavascript(source)` | Evaluates JS source in WebView context | eval() replacement (CSP blocks eval). 2-second dedup per source string. |
+| `window.__tornpda.tab.uid` | Unique ID for the current PDA tab | Read-only (set via `Object.defineProperty`). |
+| `window.__tornpda.tab.state` | Tab state object | `{ uid, isActiveTab: bool, isWebViewVisible: bool }` — use `isActiveTab` to skip processing when tab is in background. |
+| `__PDA_platformReadyPromise` | Promise that resolves when Flutter bridge is ready | `PDA_httpGet`/Post await this internally, so calling them immediately is safe (they queue). |
+| `GM_getValue`, `GM_setValue`, etc. | GreaseMonkey API compatibility layer | Uses `localStorage` with `GMV2_` prefix + JSON serialization. Provided by PDA's `handler_GM()`. |
+| `GM.xmlHttpRequest` | GreaseMonkey XHR compatibility | Routes through `PDA_httpGet`/`PDA_httpPost` internally. Default timeout: 30 seconds via AbortController. |
+| `GM_addStyle(css)` | Injects CSS `<style>` element into `<head>` | |
+| `GM_setClipboard(text)` | Copies text to clipboard | Uses `navigator.clipboard.writeText()`. |
+| `GM_notification(...)` | Shows notification | Implemented as `confirm()` dialog. Supports both object and positional argument forms. |
+| `unsafeWindow` | Direct `window` reference | Set to `window` (no sandboxing in PDA). |
+
+**Note:** All GM globals are frozen (`Object.freeze`) and non-writable (`writable: false, configurable: false`).
 
 ### Key PDA Behavior to Know
 
 - **PDA makes API calls natively** (via Flutter/Dart HTTP), NOT through the WebView's `fetch()` or `XMLHttpRequest`. This means `hookFetch()`/`hookXHR()` interception **cannot see PDA's own API traffic**. This is why we added direct API fetching with `###PDA-APIKEY###`.
 - **`###PDA-APIKEY###` replacement** happens as a simple string replace on the entire script source before injection. Any occurrence of that exact string gets replaced. To detect if PDA replaced it, check: `PDA_INJECTED_KEY.length >= 16 && !PDA_INJECTED_KEY.includes('#')`.
+- **PDA custom API key per script** — Each script can have its own API key in PDA settings. If set, it overrides the user's main key: `s.customApiKey.isNotEmpty ? s.customApiKey : pdaApiKey`.
+- **PDA_httpGet 2-second dedup** — GET dedup key is **URL only** (headers ignored). POST dedup key is `url + JSON.stringify(headers) + body`. Within 2 seconds, duplicate calls **silently return `undefined`** (no error). Our `crossOriginGet()` should avoid calling the same URL twice within 2 seconds.
 - **PDA WebView is Flutter InAppWebView** — it supports standard Web APIs but has some quirks with `eval()` (blocked by CSP), popup windows, and download handling.
-- **The `flutterInAppWebViewPlatformReady` event** fires when the native bridge is ready. `PDA_httpGet` waits for this internally.
+- **The `flutterInAppWebViewPlatformReady` event** fires when the native bridge is ready. `PDA_httpGet` waits for this internally via `__PDA_platformReadyPromise`.
 - **Script injection timing:** PDA injects at `DOCUMENT_START`, before the page DOM is ready. Our scripts use `setTimeout(init, 1200)` to ensure the DOM is available.
 - **PDA injection time setting: MUST be set to `Start`** — In Torn PDA's userscript settings, each script has an "Injection Time" option (`Start` or `End`). **Always choose `Start`** for all scripts in this repo. This ensures fetch/XHR hooks install as early as possible to capture API traffic during page load. The `setTimeout(init, 1200)` inside each script already handles waiting for the DOM before creating the UI. Choosing `End` would cause missed API interceptions, especially for Deal Finder which relies entirely on intercepted traffic.
 - **PDA remote loading:** PDA can load scripts from URLs. The `urls` file in the repo root lists the raw GitHub URLs for each script. When adding/renaming a script, update this file.
+- **PDA Global Disable** — PDA has a toggle to disable all userscripts at once (saves/restores each script's individual enabled state). Any manual script change while globally disabled resets the feature.
+- **PDA script update tracking** — PDA tracks `noRemote` / `upToDate` / `localModified` status for scripts loaded from URLs.
+- **iOS compatibility** — PDA JS snippets end with `123;` or a comment to avoid `WKErrorDomain` errors on iOS when scripts don't return a value. Our scripts return from an IIFE so this isn't needed, but good to know.
+
+### GM Storage Format Details
+
+PDA's GM compatibility layer (by Kwack) stores values differently from standard Tampermonkey:
+- **Write:** `localStorage.setItem(key, 'GMV2_' + JSON.stringify(value))`
+- **Read:** strips `GMV2_` prefix, then `JSON.parse()` the rest. Falls back to raw string if no prefix.
+- If we ever need to read data written by a GM-based script (or vice versa), use this format.
 
 ### PDA Source Code Reference
 
 Key files in the [Torn PDA repo](https://github.com/Manuito83/torn-pda):
-- `lib/providers/userscripts_provider.dart` — Script management, `adaptSource()` (API key replacement), injection logic
-- `lib/utils/js_snippets/js_handlers.dart` — `handler_pdaAPI()` (PDA_httpGet/Post), `handler_GM()` (GreaseMonkey compat), `handler_flutterPlatformReady()`
-- `lib/utils/js_snippets/js_snippets.dart` — Other injected JS (buy max abroad, etc.)
+- `lib/providers/userscripts_provider.dart` — Script management, `adaptSource()` (API key replacement), injection logic, match pattern system, global disable, update tracking
+- `lib/utils/js_snippets/js_handlers.dart` — `handler_pdaAPI()` (PDA_httpGet/Post), `handler_GM()` (GreaseMonkey compat), `handler_flutterPlatformReady()`, `handler_tabContext()`, `handler_evaluateJS()`
+- `lib/utils/js_snippets/js_snippets.dart` — Built-in JS snippets: `buyMaxAbroadJS()`, `travelRemovePlaneJS()`, `travelReturnHomeJS()`, `highlightCityItemsJS()`, `jailJS()`, `bountiesJS()`, `chatHighlightJS()`, bazaar fill buttons, etc.
 - `lib/widgets/webviews/webview_full.dart` — Main WebView widget, script injection hooks
+
+### PDA Built-In DOM Selectors (from js_snippets.dart)
+
+These are selectors PDA uses in its own built-in features. Useful for our scripts that interact with the same pages.
+
+**Travel page:**
+- `.travel-home-header-button` — "Return Home" button
+- `#travel-home-panel button.torn-btn` — Confirmation button in return home dialog
+- `[class^="airspaceScene___"]` — Flight animation scene
+- `[class^="randomFact___"]` — Random facts during flight
+
+**Abroad shops:**
+- `#user-money` or `[data-currency-money]` — User money display (`.getAttribute('data-money')` for numeric)
+- `button.torn-btn[type="submit"]` — Buy buttons (must be inside `<li>`)
+- `[class*="row___"]` — Item rows; `[class*="itemName___"]` — Item name
+- `[class*="tabletColC___"]` — Stock count (horizontal); `[class*="inlineStock___"]` — Stock (vertical)
+- `input.input-money` — Quantity input (has `data-money` attribute)
+- `div[class*="buyPanel___"]` > `p[class*="question___"]` — Price question (vertical)
+
+**Bazaar:**
+- `[class*='amountValue_'], [class*='amount___']` — Item amount
+- `[class*='price___']` — Item price
+- `input[class*='buyAmountInput_']` — Buy quantity input
+- `button[class*='buy___'], button[class*='activate-buy-button']` — Buy/cart button
+
+**Jail:**
+- `.users-list > li` — Player rows
+- `.level`, `.time`, `.user.name` — Level, time remaining, player name
+- `.buy, .bye` — Bail action link (append "1" to URL for quick bail)
+- `.bust` — Bust action link (append "1" for quick bust)
+
+**Bounties:**
+- `.bounties-list > li:not(.clear)` — Bounty rows
+- `.level` — Target level
+- `.user-red-status` — Hospital (unavailable)
+- `.user-blue-status` — Abroad/jail (unavailable)
+
+**City map:**
+- `#map .leaflet-marker-pane *` — Map items (Leaflet.js); check `src.indexOf("/images/items/")` for loot
+
+**Chat:**
+- `#chatRoot` — Chat root element
+- `[class*='chat-list-button__']` — Chat list buttons
+- `[class*='chat-box-body__'] [class*='chat-box-message__box__']` — Chat messages
+
+**React input event dispatch** (for setting input values programmatically):
+```javascript
+input.value = newValue;
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+```
 
 ---
 

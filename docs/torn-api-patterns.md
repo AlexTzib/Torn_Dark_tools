@@ -193,6 +193,355 @@ When migrating a script from v1 to v2:
 
 ---
 
+## Torn PDA Internals (from source code analysis)
+
+This section documents how Torn PDA works internally, based on reading the actual Dart/JS source code in the [torn-pda repo](https://github.com/Manuito83/torn-pda). Understanding these internals is critical for writing scripts that work seamlessly inside PDA.
+
+### PDA Script Injection Order
+
+PDA injects handler scripts in this exact order, all at `DOCUMENT_START`:
+
+1. **`handler_tabContext(tabUid)`** — Sets `window.__tornpda.tab.uid` and `window.__tornpda.tab.state`
+2. **`handler_flutterPlatformReady()`** — Creates `__PDA_platformReadyPromise` (resolves when Flutter bridge is ready)
+3. **`handler_pdaAPI()`** — Defines `PDA_httpGet()` and `PDA_httpPost()`
+4. **`handler_GM()`** — Defines all GM_* compatibility functions (by Kwack [2190604])
+5. **`handler_evaluateJS()`** — Defines `PDA_evaluateJavascript()` (eval replacement)
+6. **User scripts** — Injected via `getCondSources()`, wrapped in IIFE, API key replaced
+
+### `adaptSource()` Implementation
+
+The function that prepares userscript source before injection:
+
+```dart
+String adaptSource({required String source, required String scriptFinalApiKey}) {
+  final String withApiKey = source.replaceAll("###PDA-APIKEY###", scriptFinalApiKey);
+  String anonFunction = "(function() {$withApiKey}());";
+  // Also replaces curly quotes with straight quotes
+  anonFunction = anonFunction.replaceAll(RegExp(r'[""]'), '"').replaceAll(RegExp(r'['']'), "'");
+  return anonFunction;
+}
+```
+
+**Key details:**
+- `###PDA-APIKEY###` replacement happens on the ENTIRE source string (every occurrence)
+- Script is wrapped in an IIFE: `(function() { ...source... }());`
+- Curly/smart quotes are normalized to straight quotes (prevents copy-paste issues)
+- If the script has a custom API key configured in PDA settings, that key is used instead of the user's main key
+
+### PDA Custom API Key Per Script
+
+PDA allows each script to have its own API key:
+```dart
+scriptFinalApiKey: s.customApiKey.isNotEmpty ? s.customApiKey : pdaApiKey
+```
+If `customApiKey` is set in PDA's script settings, it overrides the user's main API key for that specific script only.
+
+### PDA_httpGet Dedup Details
+
+From `handler_pdaAPI()` source:
+
+```javascript
+async function PDA_httpGet(url, headers = {}) {
+  let now = Date.now();
+  // Dedup key is URL only (headers are NOT part of the key for GET)
+  if (loadedPdaApiGetUrls[url] && (now - loadedPdaApiGetUrls[url] < 2000)) {
+    return; // Silently returns undefined
+  }
+  loadedPdaApiGetUrls[url] = now;
+  await __PDA_platformReadyPromise;
+  return window.flutter_inappwebview.callHandler("PDA_httpGet", url, headers);
+}
+```
+
+**Critical behavior:**
+- **GET dedup key = URL only** (headers are ignored for dedup purposes)
+- **POST dedup key = url + JSON.stringify(headers) + body**
+- Dedup window is **2 seconds** (not 1 second as some docs say)
+- Within 2 seconds, the second call **silently returns `undefined`** (no error thrown)
+- Both functions `await __PDA_platformReadyPromise` internally, so calling them before platform ready is safe (they queue)
+
+### PDA Tab Context
+
+```javascript
+window.__tornpda.tab = {
+  uid: 'unique-tab-id',           // Read-only, set via Object.defineProperty
+  state: {
+    uid: 'unique-tab-id',
+    isActiveTab: false,            // Whether this tab is the active/focused tab
+    isWebViewVisible: false        // Whether the WebView is currently visible
+  }
+};
+```
+
+**Useful for:**
+- `window.__tornpda.tab.state.isActiveTab` — could be used like `isTabFocused()` to skip processing when tab is inactive
+- `window.__tornpda.tab.uid` — unique identifier for each PDA browser tab
+
+### GM Handler Implementation (by Kwack [2190604])
+
+PDA provides a full GM (Greasemonkey) compatibility layer. Key implementation details:
+
+**Storage format:**
+- Values stored in localStorage with `GMV2_` prefix + JSON serialization
+- `GM_getValue('key')` → reads `localStorage.getItem('key')`, strips `GMV2_` prefix, JSON-parses the rest
+- `GM_setValue('key', value)` → writes `localStorage.setItem('key', 'GMV2_' + JSON.stringify(value))`
+
+**GM.xmlHttpRequest implementation:**
+- Routes through `PDA_httpGet` / `PDA_httpPost` internally
+- Default timeout: **30 seconds** (via AbortController)
+- Supports `onload`, `onerror`, `onabort`, `ontimeout`, `onprogress`, `onreadystatechange` callbacks
+- Returns an object with `.abort()` method
+- Two AbortControllers: one for user abort, one for timeout
+
+**Available GM functions:**
+| Function | Implementation |
+|---|---|
+| `GM.getValue(key, default)` | async, reads from localStorage with GMV2_ prefix |
+| `GM.setValue(key, value)` | async, writes to localStorage with GMV2_ prefix |
+| `GM.deleteValue(key)` | async, removes from localStorage |
+| `GM.listValues()` | async, returns all localStorage keys |
+| `GM.xmlHttpRequest(details)` | async, routes through PDA_httpGet/Post |
+| `GM.notification(details)` | Uses `confirm()` dialog |
+| `GM_info` | Returns `{ script: {}, scriptHandler: "GMforPDA version 2.2", version: 2.2 }` |
+| `GM_getValue(key, default)` | sync version |
+| `GM_setValue(key, value)` | sync version |
+| `GM_deleteValue(key)` | sync version |
+| `GM_listValues()` | sync version |
+| `GM_addStyle(css)` | Creates `<style>` element in `<head>` |
+| `GM_notification(...)` | Supports both object and positional arguments |
+| `GM_setClipboard(text)` | Uses `navigator.clipboard.writeText()` |
+| `GM_xmlhttpRequest(details)` | sync version, returns `{ abort: fn }` |
+| `unsafeWindow` | Set to `window` |
+
+**Note:** All GM globals are frozen (`Object.freeze`) and non-writable (`writable: false, configurable: false`).
+
+### PDA_evaluateJavascript
+
+```javascript
+async function PDA_evaluateJavascript(source) {
+  // 2-second dedup per source string
+  if (loadedPdaApiEvalScripts[source] && (Date.now() - loadedPdaApiEvalScripts[source] < 2000)) {
+    return;
+  }
+  loadedPdaApiEvalScripts[source] = Date.now();
+  await __PDA_platformReadyPromise;
+  return flutter_inappwebview.callHandler("PDA_evaluateJavascript", source);
+}
+```
+
+Use case: `eval()` is blocked by Torn's CSP. If you need to execute dynamically-loaded code, fetch it with `PDA_httpGet` then pass to `PDA_evaluateJavascript`.
+
+### PDA Built-In JS Snippets
+
+PDA injects its own JS snippets for various features. These are NOT userscripts — they're built into the app. But knowing their selectors and patterns is valuable.
+
+#### Travel-Related Snippets
+
+**`travelRemovePlaneJS()`** — Hides flight animation elements:
+```css
+.travel-agency-travelling .stage,
+.travel-agency-travelling .popup-info,
+[class^="airspaceScene___"][class*="outboundFlight___"],
+[class^="airspaceScene___"][class*="returnFlight___"],
+[class^="randomFact___"],
+[class^="randomFactWrapper___"],
+[class^="delimiter-"]
+{ display: none !important; }
+```
+
+**`travelReturnHomeJS()`** — Clicks the "Return Home" button:
+```javascript
+let travelHome = document.querySelector('.travel-home-header-button');
+if (travelHome) {
+  travelHome.click();
+  setTimeout(function() {
+    let confirmBtn = document.querySelector('#travel-home-panel button.torn-btn');
+    if (confirmBtn) confirmBtn.click();
+  }, 1000);
+}
+```
+
+#### Abroad Shop Selectors (from `buyMaxAbroadJS()`)
+
+These are the actual DOM selectors PDA uses for abroad shops:
+
+| Element | Selector | Notes |
+|---|---|---|
+| User money | `#user-money` or `[data-currency-money]` | `.getAttribute('data-money')` for numeric value |
+| Buy buttons | `button.torn-btn[type="submit"]` | Must be inside an `<li>` (prevents Bank page injection) |
+| Item rows | `[class*="row___"]` | Both horizontal and vertical layouts |
+| Stock header | `[class*="stockHeader___"]` | Column header row |
+| Item name | `[class*="itemName___"]` | Item name cell |
+| Buy cell | `[class*="buyCell___"]` | Buy quantity/button cell |
+| Stock count (horiz) | `[class*="tabletColC___"]` | Stock quantity in horizontal mode |
+| Stock count (vert) | `[class*="inlineStock___"]` | Pattern: `x{number}` |
+| Buy panel (vert) | `div[class*="buyPanel___"]` | Contains price question |
+| Price question | `p[class*="question___"]` | "How many at $X each?" |
+| Capacity message | `.messageContent___*` | Pattern: `purchased N / M` |
+| Items bar | `[class*="items-"]` | Pattern: `N / M` (items capacity) |
+| Quantity input | `input.input-money` | Has `data-money` attribute for max |
+| Basket button | `button[class*="buyIconButton___"]` | Shopping cart icon |
+
+**Layout detection:** PDA detects horizontal vs vertical mode by:
+1. Checking for visible "TYPE" column header in `[class*="itemsHeader___"] > div`
+2. Checking buy button text (horizontal = "BUY", vertical = different)
+3. Fallback: `window.innerWidth > 700` = horizontal
+
+**React input hack:** PDA dispatches proper React events when setting input values:
+```javascript
+input.value = max;
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+```
+
+#### Bazaar Selectors (from `addOthersBazaarFillButtonsJS()`)
+
+| Element | Selector |
+|---|---|
+| Item amount | `[class*='amountValue_'], [class*='amount___']` |
+| Item price | `[class*='price___']` |
+| User money | `#user-money` (with `data-money` attribute) |
+| Buy input | `input[class*='buyAmountInput_']` |
+| Buy button | `button[class*='buy___'], button[class*='activate-buy-button']` |
+| Item container | `[class*='item___'], [class*='rowItems_']` |
+| Wide popup field | `div[class*="field___"]` |
+
+#### City Item Map (from `highlightCityItemsJS()`)
+
+```javascript
+// Find items on the city map
+for (let el of document.querySelectorAll("#map .leaflet-marker-pane *")) {
+  let src = el.getAttribute("src");
+  if (src.indexOf("/images/items/") > -1) {
+    el.classList.add("pdaCityItem");
+  }
+}
+```
+
+Map uses Leaflet.js; items are `<img>` elements in `#map .leaflet-marker-pane` with src containing `/images/items/`.
+
+#### Chat Selectors (from `chatHighlightJS()`)
+
+| Element | Selector |
+|---|---|
+| Chat root | `#chatRoot` |
+| Chat list buttons | `[class*='chat-list-button__']` |
+| Chat message boxes | `[class*='chat-box-body__'] [class*='chat-box-message__box__']` |
+| Chat box body | `[class*='chat-box-body__']` |
+
+#### Jail Selectors (from `jailJS()`)
+
+| Element | Selector |
+|---|---|
+| Player list | `.users-list > li` |
+| Level | `.level` (text: "Level X" or "LEVEL: X") |
+| Time remaining | `.time` (text: "Time: Xh Ym Zs") |
+| Player name | `.user.name` |
+| Bail action | `.buy, .bye` |
+| Bail icon | `.bye-icon` |
+| Bust action | `.bust` |
+| Bust icon | `.bust-icon` |
+| Content wrapper | `.content-wrapper` |
+| Page gallery | `.gallery-wrapper` |
+
+**Bail/Bust quick action:** Appending "1" to the action link URL performs a quick bail/bust.
+
+#### Bounty Selectors (from `bountiesJS()`)
+
+| Element | Selector |
+|---|---|
+| Bounty list | `.bounties-list > li:not(.clear)` |
+| Level | `.level` |
+| Unavailable (hospital) | `.user-red-status` |
+| Unavailable (abroad/jail) | `.user-blue-status` |
+| Content wrapper | `.content-wrapper` |
+| Page gallery | `.gallery-wrapper` |
+
+### PDA Script Match Pattern System
+
+PDA determines whether to inject a script based on URL match patterns from the userscript `@match` header:
+```dart
+bool shouldInject(String url, [UserScriptTime? time]) {
+  // Parses @match patterns from script header
+  // Supports wildcards: https://www.torn.com/*
+  // Can also match specific pages: https://www.torn.com/page.php*
+}
+```
+
+### PDA Global Disable Feature
+
+PDA has a "Global Disable" toggle that disables all userscripts at once:
+- Saves each script's enabled state before disabling
+- Restores original states when re-enabled
+- Any manual script change while globally disabled resets the feature
+
+### PDA Script Update System
+
+PDA tracks script update status:
+- `noRemote` — script has no remote URL
+- `upToDate` — matches remote version
+- `localModified` — local edits after last remote sync
+- Scripts can be loaded from URLs and auto-updated
+
+### iOS Compatibility Note
+
+All PDA JS snippets end with `// Return to avoid iOS WKErrorDomain 123;` or just `123;`. This prevents WKWebView errors on iOS when the script doesn't return a value.
+
+---
+
+## Torn Internal Global Variables
+
+### `window.topBannerInitData`
+
+Torn stores some user data in a global JS object accessible without API calls:
+
+```javascript
+const stamp = window.topBannerInitData &&
+              window.topBannerInitData.user &&
+              window.topBannerInitData.user.data &&
+              window.topBannerInitData.user.data.hospitalStamp;
+```
+
+**Known fields (needs further exploration):**
+- `window.topBannerInitData.user.data.hospitalStamp` — Hospital end timestamp
+- Potentially more user status data (energy, nerve, etc.) — needs investigation
+
+**Use case:** Get instant hospital status without an API call (zero-cost, zero-latency).
+
+### RFCV Token (CSRF Protection)
+
+Torn uses an RFCV token for internal POST requests. Extract from cookies:
+
+```javascript
+const getRfcvToken = () => {
+  const match = document.cookie.match(/rfc_v=([^;]+)/);
+  return match ? match[1] : null;
+};
+```
+
+**Required for:** Any POST to Torn's internal endpoints (e.g., `/factions.php`, `/inventory.php`). Not needed for public API calls.
+
+Example usage:
+```javascript
+const body = new URLSearchParams({
+  step: 'armouryTabContent',
+  type: 'utilities',
+  start: '0',
+  ajax: 'true'
+});
+await fetch(`https://www.torn.com/factions.php?rfcv=${rfcv}`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'X-Requested-With': 'XMLHttpRequest'
+  },
+  body,
+  credentials: 'same-origin'
+});
+```
+
+---
+
 ## Common API Patterns from Community Scripts
 
 ### Fetch Interception (TornTools pattern)

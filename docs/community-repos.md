@@ -390,10 +390,192 @@ Includes: `assist`, `bazaar`, `chain`, `info`, `lotto`, `perks`, `spy`, `stats`,
 ### Should Adopt Next
 | Pattern | Source | Priority | Why |
 |---|---|---|---|
-| `requireElement()` polling | TornTools | High | Torn is a React SPA — DOM elements appear asynchronously. Essential for reliable DOM interaction. |
+| `requireElement()` / `waitForElement()` with MutationObserver | TornTools, TornHealAdvisor | High | Torn is a React SPA — DOM elements appear asynchronously. MutationObserver with auto-cleanup timeout is more reliable than setTimeout polling. |
 | Absolute timestamp timers | TornTools | High | Our countdown timers will desync when tab is backgrounded. `dataset.end` pattern prevents this. |
-| `isTabFocused()` guard | TornTools | Medium | Prevents unnecessary processing when tab is in background. Saves battery on mobile/PDA. |
-| Non-blocking notifications | Xoke | Medium | Better UX than current approach for transient messages. |
+| `safeFetch()` with AbortController timeout | TornTargetManager | High | Our `tornApiGet()` has no timeout. Hung requests block the script forever. Add 10-15s timeout. |
+| `isTabFocused()` guard / PDA tab state | TornTools, PDA | Medium | Use `document.hidden` or `window.__tornpda.tab.state.isActiveTab` to skip processing when tab is inactive. Saves battery on mobile. |
+| Batch API with per-item error isolation | TornTargetManager | Medium | `Promise.all(batch.map(fn.then(...).catch(...)))` — one failure doesn't kill the batch. Useful for War Manager profile scans. |
+| `debounce()` utility | TornRankedWarTargetFinder | Medium | Prevents excessive function calls on filter inputs. Needed for bounty filter, market sniper. |
+| Input validation helpers | TornTargetManager | Medium | Validate API keys (`/^[a-zA-Z0-9]{16}$/`), user IDs (`/^\d+$/`), faction IDs before use. |
+| `window.topBannerInitData` | TornHealAdvisor | Medium | Torn stores user data (hospitalStamp, etc.) in a global. Free data without an API call. |
+| RFCV token extraction | russianrob OC Loan Manager | Low | `document.cookie.match(/rfc_v=([^;]+)/)` — needed for POST requests to Torn internal endpoints. |
+| Non-blocking notifications | Xoke | Low | Better UX than current approach for transient messages. Auto-dismiss with fade animation. |
 | Virtual scroll handling | danielgoodwin97 | Low | Only needed if we scrape long lists (Deal Finder could benefit). |
-| CSV export with injection protection | Xoke | Low | If we ever add data export features. |
+| CSV export with injection protection | Xoke | Low | If we ever add data export features. Prefix cells with `'` to prevent formula execution. |
 | TypeScript build pipeline | kek91 | Low | Type safety would help prevent bugs like the 0/0 energy issue, but adds build complexity. |
+
+---
+
+## Reusable Code Patterns (from community analysis)
+
+### safeFetch with AbortController Timeout
+
+From TornTargetManager.user.js — prevents hung requests:
+
+```javascript
+function safeFetch(url, timeout = 15000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    return fetch(url, { signal: controller.signal })
+        .then(response => {
+            clearTimeout(timeoutId);
+            if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            return response.json();
+        })
+        .catch(error => {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') throw new Error('Request timeout');
+            throw error;
+        });
+}
+```
+
+### Batch API with Error Isolation
+
+From TornTargetManager.user.js — parallel requests where one failure doesn't kill the batch:
+
+```javascript
+const batch = targetList.slice(start, start + BATCH_SIZE);
+const results = await Promise.all(batch.map(target =>
+    safeFetch(`https://api.torn.com/user/${target.id}?selections=profile&key=${apiKey}`)
+        .then(data => ({ target, data, error: null }))
+        .catch(error => ({ target, data: null, error }))
+));
+```
+
+### MutationObserver with Auto-Cleanup
+
+From TornHealAdvisor.user.js — observes DOM changes with automatic timeout disconnect:
+
+```javascript
+function waitForElement(selector, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        const el = document.querySelector(selector);
+        if (el) return resolve(el);
+        const obs = new MutationObserver(() => {
+            const el = document.querySelector(selector);
+            if (el) { obs.disconnect(); clearTimeout(tid); resolve(el); }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+        const tid = setTimeout(() => { obs.disconnect(); reject(new Error('timeout')); }, timeoutMs);
+    });
+}
+```
+
+### Debounce Utility
+
+From TornRankedWarTargetFinder.user.js:
+
+```javascript
+function debounce(func, wait) {
+    var timeout;
+    return function() {
+        var context = this, args = arguments;
+        clearTimeout(timeout);
+        timeout = setTimeout(function() { func.apply(context, args); }, wait);
+    };
+}
+```
+
+### Centralized Regex Library
+
+From TornRankedWarTargetFinder.user.js — pre-compiled patterns:
+
+```javascript
+var REGEX = {
+    API_KEY: /^[a-zA-Z0-9]{16}$/,
+    FACTION_ID: /^\d+$/,
+    FOREIGN_HOSPITAL: /in an? .+ hospital/i,
+    BATTLE_STATS: /(\d+\.?\d*)([kmb]?)/,
+    HOSPITAL_TIME: /(\d+)\s*(second|sec|minute|min|hour|hr)/i,
+    USER_ID: /XID=(\d+)/
+};
+```
+
+### Non-Blocking Notification Toast
+
+From TornRankedWarTargetFinder.user.js — auto-dismiss with fade:
+
+```javascript
+function showNotification(message, type) {
+    var notification = document.createElement('div');
+    notification.textContent = message;
+    notification.style.cssText =
+        'position:fixed;top:20px;right:20px;z-index:10000;padding:15px 20px;border-radius:5px;' +
+        'background:' + (type === 'error' ? '#c43b3b' : type === 'warning' ? '#b8860b' : '#2d6e2d') + ';' +
+        'color:white;font-weight:bold;box-shadow:0 2px 10px rgba(0,0,0,.3);transition:opacity .3s;';
+    document.body.appendChild(notification);
+    setTimeout(function() {
+        notification.style.opacity = '0';
+        setTimeout(function() { notification.remove(); }, 300);
+    }, 4000);
+}
+```
+
+### Cross-Tab Synchronization
+
+From TornTargetManager.user.js — detects changes from other tabs:
+
+```javascript
+function setupStorageListener() {
+    let lastTimestamp = GM_getValue(STORAGE_KEY + '_timestamp', '0');
+    setInterval(() => {
+        const currentTimestamp = GM_getValue(STORAGE_KEY + '_timestamp', '0');
+        if (currentTimestamp !== lastTimestamp) {
+            lastTimestamp = currentTimestamp;
+            loadSettings();
+            if (pageActive) displayTable();
+        }
+    }, 2000);
+}
+```
+
+### Torn Internal Data Access
+
+From TornHealAdvisor.user.js — free user data without API call:
+
+```javascript
+const stamp = window.topBannerInitData &&
+              window.topBannerInitData.user &&
+              window.topBannerInitData.user.data &&
+              window.topBannerInitData.user.data.hospitalStamp;
+```
+
+### RFCV Token for Torn Internal POST
+
+From torn-oc-loan-manager-pda.user.js — CSRF token extraction:
+
+```javascript
+const getRfcvToken = () => {
+    const match = document.cookie.match(/rfc_v=([^;]+)/);
+    return match ? match[1] : null;
+};
+
+// Usage with URLSearchParams
+const body = new URLSearchParams({ step: 'armouryTabContent', type: 'utilities', start: '0', ajax: 'true' });
+await fetch(`https://www.torn.com/factions.php?rfcv=${rfcv}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+    body,
+    credentials: 'same-origin'
+});
+```
+
+### Battle Stats Suffix Parsing
+
+From TornTargetManager.user.js — handles k/m/b suffixes:
+
+```javascript
+function parseBattleStats(text) {
+    if (!text) return 0;
+    const clean = text.toLowerCase().replace(/[",\s]/g, '');
+    const match = clean.match(/(\d+\.?\d*)([kmb]?)/);
+    if (!match) return 0;
+    const num = parseFloat(match[1]);
+    const suffix = match[2];
+    if (suffix === 'k') return num * 1000;
+    if (suffix === 'm') return num * 1000000;
+    if (suffix === 'b') return num * 1000000000;
+    return num;
+}
+```
