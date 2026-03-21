@@ -3,7 +3,7 @@
 ## Overview
 
 A quick-travel navigation overlay for [Torn City](https://www.torn.com) that runs inside **Torn PDA** (or any Tampermonkey/Greasemonkey-compatible browser).
-It displays a draggable bubble that expands into a panel showing your current travel status and one-tap navigation buttons for common travel destinations (Mexico, Cayman Islands, Canada). When abroad, it shows contextual actions (open shop, fly home).
+It displays a draggable bubble that expands into a panel showing your current travel status, hospital timer, and one-tap navigation buttons for common travel destinations (Mexico, Cayman Islands, Canada, Switzerland). When abroad, it shows contextual actions (open shop, Swiss Bank, Rehab Centre, fly home).
 
 **The script is read-only. It never buys, sells, flies, or performs any game action on the player's behalf. All buttons navigate to the relevant Torn page where the user must confirm the action manually.**
 
@@ -12,8 +12,9 @@ It displays a draggable bubble that expands into a panel showing your current tr
 || Feature | Description |
 ||---|---|
 || **Travel status** | Shows whether you're in Torn, abroad (with country name), or in flight (with ETA countdown) |
-|| **Quick-travel buttons** | One tap to navigate to the travel agency page for Mexico, Cayman Islands, or Canada |
-|| **Abroad actions** | When abroad: button to open the abroad shop page (plushies, flowers) or fly home |
+|| **Hospital timer** | Red card with countdown bar when you're hospitalized — shows time remaining until release |
+|| **Quick-travel buttons** | One tap to navigate to the travel agency page for Mexico, Cayman Islands, Canada, or Switzerland |
+|| **Abroad actions** | When abroad: button to open the abroad shop page (plushies, flowers), Swiss Bank/Rehab info (Switzerland), or fly home |
 || **In-flight ETA** | Progress bar and countdown timer when traveling |
 || **Arrival tips** | Shows what to do when you arrive (buy plushies, visit bank, buy flowers) |
 || **Auto-polling** | Refreshes travel status every 30 seconds while the panel is open |
@@ -51,16 +52,19 @@ It displays a draggable bubble that expands into a panel showing your current tr
 
 The script determines your location from the API response:
 - **Traveling**: `travel.time_left > 0` — shows ETA countdown and progress bar
-- **Abroad**: status state contains "abroad" or description matches "In Mexico/Canada/Cayman..." — shows shop and return buttons
+- **Abroad**: status state contains "abroad" or description matches "In Mexico/Canada/Cayman/Switzerland..." — shows shop/bank/rehab and return buttons
+- **In Hospital**: status state is "Hospital" — shows red hospital card with countdown timer and description
 - **In Torn**: default state — shows quick-travel destination buttons
 
 ### Context-Sensitive Actions
 
 | Location | Actions Shown |
 |---|---|
-| In Torn City | Fly to Mexico (plushies, ~26 min), Fly to Cayman (banking, ~35 min), Fly to Canada (flowers, ~41 min) |
+| In Torn City | Fly to Mexico (plushies, ~26 min), Fly to Cayman (banking, ~35 min), Fly to Canada (flowers, ~41 min), Fly to Switzerland (Swiss Bank/Rehab, ~2h 33min) |
+| In Hospital | Hospital timer card with countdown and description + travel buttons below |
 | Abroad (Mexico/Canada) | Open abroad shop, Fly back to Torn |
 | Abroad (Cayman) | Banking info note, Fly back to Torn |
+| Abroad (Switzerland) | Swiss Bank info, Rehabilitation Centre info, Fly back to Torn |
 | In Flight | ETA countdown with progress bar, arrival tips for destination |
 
 ## API Calls
@@ -84,12 +88,14 @@ Returns travel status (destination, time_left, departed, timestamp) and profile 
 || Mexico | MX | Plushies | ~26 min |
 || Cayman Islands | KY | Banking | ~35 min |
 || Canada | CA | Flowers | ~41 min |
+|| Switzerland | CH | Swiss Bank / Rehab | ~2h 33min |
 
 ## Data Sources
 
 || Source | Method | Notes |
 ||---|---|---|
 || Travel status | Torn API v1 (`user/?selections=travel,profile`) | Returns travel destination, time_left, status state/description |
+|| Hospital timer | Torn API v1 (`user/?selections=travel,profile`) | status.state === 'Hospital', status.until = unix timestamp |
 || API key | PDA injection / manual entry / network interception | Three-tier priority system shared with other scripts |
 
 ## Torn Policy Compliance
@@ -137,5 +143,5 @@ Returns travel status (destination, time_left, departed, timestamp) and profile 
 - Requires an API key for travel status (no status shown without one).
 - Flight times shown are approximate — actual times depend on travel-related merits and perks.
 - The script navigates to the travel agency page but cannot pre-select the destination — the user must choose the country on the page.
-- Only three destinations are included (Mexico, Cayman, Canada). Other countries can be added by modifying the `COUNTRIES` array.
-- The progress bar during flight uses 45 minutes as the maximum estimate, which may not be exact for all destinations.
+- The progress bar during flight uses each destination's approximate fly time as the maximum estimate, which may not be exact with travel perks.
+- Hospital timer accuracy depends on the 30-second poll interval.

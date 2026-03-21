@@ -620,35 +620,36 @@ Every script has:
 
 ### Traveler Utility (`torn-traveler-utility-bubble.user.js`)
 
-**Purpose:** Quick-travel navigation tool. Shows current travel status (in Torn / abroad / flying) and provides one-tap navigation buttons for Mexico, Cayman Islands, and Canada. Context-sensitive: shows fly-to buttons when in Torn, shop + return buttons when abroad, ETA countdown when flying.
+**Purpose:** Quick-travel navigation tool with hospital timer. Shows current travel status (in Torn / abroad / flying), hospital countdown, and provides one-tap navigation buttons for Mexico, Cayman Islands, Canada, and Switzerland. Context-sensitive: shows fly-to buttons when in Torn, shop + return buttons when abroad (with Swiss Bank & Rehab info for Switzerland), ETA countdown when flying, hospital timer with progress bar when hospitalized.
 
 **Design:**
 - **56 px bubble** with blue gradient, airplane icon
-- **340 px panel** — status card + context-sensitive action buttons
+- **340 px panel** — status card + hospital card + context-sensitive action buttons
 - **z-index base 999935** — lowest of all scripts
-- **Single API endpoint:** `user/?selections=travel,profile` for travel status
+- **Single API endpoint:** `user/?selections=travel,profile` for travel status + hospital state
 
 **Key constants:**
-- `COUNTRIES` — Array of 3 objects `{ id, name, flag, color, items, flyTime }` for Mexico, Cayman, Canada
+- `COUNTRIES` — Array of 4 objects `{ id, name, flag, color, items, flyTime }` for Mexico, Cayman, Canada, Switzerland
 - `TRAVEL_URL` — `https://www.torn.com/page.php?sid=travel`
 - `ABROAD_URL` — `https://www.torn.com/shops.php?step=abroad`
 - `POLL_MS = 30000` — refresh travel status every 30 seconds
 
 **Key functions:**
 - `fetchTravelStatus()` — Fetches `api.torn.com/user/?selections=travel,profile`; uses `PDA_httpGet` if available, falls back to `fetch()`
-- `parseTravelData(data)` — Determines `STATE.location` (torn/abroad/traveling) and `STATE.abroadCountry` from API response
+- `parseTravelData(data)` — Determines `STATE.location` (torn/abroad/traveling), `STATE.abroadCountry`, and `STATE.hospital` (active/until/description) from API response
 - `extractCountryFromStatus(desc)` — Regex extraction of country name from status description string
 - `renderStatusCard()` — Shows current location, destination (if traveling), ETA (if flying), last update time
+- `renderHospitalCard()` — Red card with hospital icon, description, countdown progress bar, and time remaining until release. Only shown when `STATE.hospital.active` is true
 - `renderTornCard()` — When in Torn: fly-to buttons for each country with flag, items, and approximate fly time
-- `renderAbroadCard()` — When abroad: shop button (for non-banking countries), banking info (for Cayman), return-home button
-- `renderTravelingCard()` — When flying: progress bar, ETA countdown, arrival tips for destination
+- `renderAbroadCard()` — When abroad: shop button (for shopping countries), banking info (for Cayman), Swiss Bank + Rehab Centre info (for Switzerland), return-home button
+- `renderTravelingCard()` — When flying: progress bar (dynamic max based on destination fly time), ETA countdown, arrival tips for destination
 - `onPanelExpand()` / `onPanelCollapse()` — Start/stop polling on panel open/close
 
 **Data flow:**
 1. API key resolved (PDA > manual > intercepted)
 2. On panel open: `fetchTravelStatus()` + start 30s polling
-3. `parseTravelData()` determines location from travel + status data
-4. `renderPanel()` shows status card + context-appropriate action cards
+3. `parseTravelData()` determines location from travel + status data; detects hospital from status.state/until
+4. `renderPanel()` shows status card + hospital card (if applicable) + context-appropriate action cards
 5. All buttons navigate to Torn pages; no game actions performed
 
 **API usage:**

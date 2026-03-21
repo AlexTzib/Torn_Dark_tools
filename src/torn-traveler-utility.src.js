@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - Traveler Utility
 // @namespace    alex.torn.pda.traveler.bubble
-// @version      1.0.0
-// @description  Quick-travel buttons for Mexico, Cayman Islands, and Canada. Shows travel status, flight ETA, and links to abroad shops. One tap to navigate — game actions are always manual.
+// @version      1.1.0
+// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Hospital timer, flight ETA, abroad shop links, Swiss Bank & Rehab info. One tap to navigate — game actions are always manual.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -25,9 +25,10 @@
   /* ── Country data ────────────────────────────────────────── */
 
   const COUNTRIES = [
-    { id: 'mexico',  name: 'Mexico',          flag: '\uD83C\uDDF2\uD83C\uDDFD', color: '#4caf50', items: 'Plushies',       flyTime: '~26 min' },
-    { id: 'cayman',  name: 'Cayman Islands',   flag: '\uD83C\uDDF0\uD83C\uDDFE', color: '#42a5f5', items: 'Banking',        flyTime: '~35 min' },
-    { id: 'canada',  name: 'Canada',           flag: '\uD83C\uDDE8\uD83C\uDDE6', color: '#e67e22', items: 'Flowers',        flyTime: '~41 min' },
+    { id: 'mexico',      name: 'Mexico',          flag: '\uD83C\uDDF2\uD83C\uDDFD', color: '#4caf50', items: 'Plushies',           flyTime: '~26 min' },
+    { id: 'cayman',      name: 'Cayman Islands',   flag: '\uD83C\uDDF0\uD83C\uDDFE', color: '#42a5f5', items: 'Banking',            flyTime: '~35 min' },
+    { id: 'canada',      name: 'Canada',           flag: '\uD83C\uDDE8\uD83C\uDDE6', color: '#e67e22', items: 'Flowers',            flyTime: '~41 min' },
+    { id: 'switzerland', name: 'Switzerland',       flag: '\uD83C\uDDE8\uD83C\uDDED', color: '#dc143c', items: 'Swiss Bank / Rehab', flyTime: '~2h 33min' },
   ];
 
   const TRAVEL_URL = 'https://www.torn.com/page.php?sid=travel';
@@ -41,6 +42,7 @@
     travel: null,    /* { destination, departed, time_left, timestamp, status } */
     location: 'torn', /* 'torn' | 'abroad' | 'traveling' | 'unknown' */
     abroadCountry: '', /* e.g. 'Mexico' if currently abroad */
+    hospital: { active: false, until: 0, description: '' },
     lastFetchTs: 0,
     lastError: '',
     fetching: false,
@@ -145,6 +147,21 @@
     } else {
       STATE.location = 'torn';
       STATE.abroadCountry = '';
+    }
+
+    /* Hospital detection — status.state === 'Hospital', status.until = unix ts */
+    const hospState = String(statusObj?.state || '').toLowerCase();
+    if (hospState === 'hospital') {
+      const untilTs = Number(statusObj?.until || 0);
+      STATE.hospital = {
+        active: true,
+        until: untilTs,
+        description: statusObj?.description || 'In hospital'
+      };
+      const remaining = Math.max(0, untilTs - nowUnix());
+      addLog(`In hospital — ${formatSeconds(remaining)} remaining`);
+    } else {
+      STATE.hospital = { active: false, until: 0, description: '' };
     }
   }
 
@@ -313,6 +330,7 @@
 
     body.innerHTML = `
       ${renderStatusCard()}
+      ${renderHospitalCard()}
       ${renderApiKeyCard()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
       ${renderActionCards()}
@@ -348,6 +366,33 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         ${statusHtml}
         <div style="font-size:10px;color:#666;margin-top:6px;">Updated: ${escapeHtml(lastFetchLabel)}</div>
+      </div>`;
+  }
+
+  function renderHospitalCard() {
+    if (!STATE.hospital.active) return '';
+    const remaining = Math.max(0, STATE.hospital.until - nowUnix());
+    const desc = STATE.hospital.description || 'In hospital';
+    const pct = remaining > 0 ? Math.max(0, Math.min(100, 100 - (remaining / (5 * 3600)) * 100)) : 100;
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+          <span style="font-size:18px;">\uD83C\uDFE5</span>
+          <div>
+            <div style="font-size:14px;color:#f44;font-weight:bold;">In Hospital</div>
+            <div style="font-size:11px;color:#ffb3b3;">${escapeHtml(desc)}</div>
+          </div>
+        </div>
+        ${remaining > 0 ? `
+          <div style="background:#2f3340;border-radius:6px;overflow:hidden;height:16px;margin-bottom:6px;">
+            <div style="background:#f44;height:100%;width:${pct}%;transition:width 0.5s;"></div>
+          </div>
+          <div style="text-align:center;font-size:16px;font-weight:bold;color:#ffd700;">${formatSeconds(remaining)}</div>
+          <div style="text-align:center;font-size:11px;color:#888;margin-top:2px;">until release</div>
+        ` : `
+          <div style="text-align:center;font-size:14px;color:#4caf50;font-weight:bold;">Released!</div>
+        `}
       </div>`;
   }
 
@@ -391,29 +436,37 @@
       STATE.abroadCountry.toLowerCase().includes(c.id)
     );
     const countryName = country ? country.name : STATE.abroadCountry;
-    const countryItems = country ? country.items : 'Items';
     const countryColor = country ? country.color : '#42a5f5';
 
     let html = `<div style="margin-bottom:10px;padding:10px;border:1px solid ${countryColor};border-radius:10px;background:#111a13;">`;
     html += `<div style="font-weight:bold;color:${countryColor};margin-bottom:8px;">\uD83C\uDF0D In ${escapeHtml(countryName)}</div>`;
 
-    /* Buy items button */
-    if (country && country.items !== 'Banking') {
+    if (country && country.id === 'switzerland') {
+      /* Switzerland — Swiss Bank + Rehab Centre */
       html += `
-        <div style="margin-bottom:8px;">
-          <a href="${escapeHtml(ABROAD_URL)}" class="tpda-trav-shop tpda-trav-btn" style="background:${countryColor};width:100%;justify-content:center;padding:10px;">
-            \uD83D\uDED2 Buy ${escapeHtml(countryItems)} (open shop)
-          </a>
-          <div style="font-size:10px;color:#888;margin-top:4px;text-align:center;">Opens the abroad shop page \u2014 use the Buy Max button on the page</div>
+        <div style="margin-bottom:8px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#1a1d26;">
+          <div style="font-size:12px;color:#dc143c;font-weight:bold;">\uD83C\uDFE6 Swiss Bank</div>
+          <div style="font-size:11px;color:#bbb;margin-top:4px;">Deposit funds at higher interest rates than Cayman.</div>
+        </div>
+        <div style="margin-bottom:8px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#1a1d26;">
+          <div style="font-size:12px;color:#4caf50;font-weight:bold;">\uD83C\uDFE5 Rehabilitation Centre</div>
+          <div style="font-size:11px;color:#bbb;margin-top:4px;">Reset drug addiction and cooldowns.</div>
         </div>`;
-    }
-
-    /* Cayman banking note */
-    if (country && country.items === 'Banking') {
+    } else if (country && country.id === 'cayman') {
+      /* Cayman banking */
       html += `
         <div style="margin-bottom:8px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#1a1d26;">
           <div style="font-size:12px;color:#42a5f5;font-weight:bold;">\uD83C\uDFE6 Cayman Banking</div>
           <div style="font-size:11px;color:#bbb;margin-top:4px;">Visit the bank page to deposit or withdraw funds.</div>
+        </div>`;
+    } else if (country) {
+      /* Normal shopping destination */
+      html += `
+        <div style="margin-bottom:8px;">
+          <a href="${escapeHtml(ABROAD_URL)}" class="tpda-trav-shop tpda-trav-btn" style="background:${countryColor};width:100%;justify-content:center;padding:10px;">
+            \uD83D\uDED2 Buy ${escapeHtml(country.items)} (open shop)
+          </a>
+          <div style="font-size:10px;color:#888;margin-top:4px;text-align:center;">Opens the abroad shop page \u2014 use the Buy Max button on the page</div>
         </div>`;
     }
 
@@ -441,7 +494,11 @@
     html += `<div style="font-weight:bold;color:${color};margin-bottom:8px;">\u2708\uFE0F Flying to ${escapeHtml(dest)}</div>`;
 
     if (timeLeft > 0) {
-      const pct = Math.max(0, Math.min(100, 100 - (timeLeft / (45 * 60)) * 100));
+      /* Dynamic max for progress bar — use known fly time or fall back to 3h */
+      const maxSec = country && /(\d+)h/.test(country.flyTime)
+        ? parseInt(RegExp.$1) * 3600 + ((/(\d+)min/.test(country.flyTime)) ? parseInt(RegExp.$1) * 60 : 0)
+        : (country ? 45 * 60 : 3 * 3600);
+      const pct = Math.max(0, Math.min(100, 100 - (timeLeft / maxSec) * 100));
       html += `
         <div style="background:#2f3340;border-radius:6px;overflow:hidden;height:20px;margin-bottom:8px;">
           <div style="background:${color};height:100%;width:${pct}%;transition:width 0.5s;"></div>
@@ -454,10 +511,14 @@
 
     /* What to do when you arrive */
     if (country) {
+      let arrivalAdvice;
+      if (country.id === 'switzerland') arrivalAdvice = '\uD83C\uDFE6 Visit Swiss Bank or \uD83C\uDFE5 Rehab Centre';
+      else if (country.id === 'cayman') arrivalAdvice = '\uD83C\uDFE6 Visit the bank';
+      else arrivalAdvice = '\uD83D\uDED2 Buy ' + escapeHtml(country.items) + ' at the shop';
       html += `
         <div style="margin-top:10px;padding:8px;border:1px solid #2f3340;border-radius:8px;background:#1a1d26;">
           <div style="font-size:11px;color:#bbb;">\uD83D\uDCCB When you arrive:</div>
-          <div style="font-size:12px;color:${color};font-weight:bold;margin-top:4px;">${country.items === 'Banking' ? '\uD83C\uDFE6 Visit the bank' : '\uD83D\uDED2 Buy ' + escapeHtml(country.items) + ' at the shop'}</div>
+          <div style="font-size:12px;color:${color};font-weight:bold;margin-top:4px;">${arrivalAdvice}</div>
         </div>`;
     }
 
