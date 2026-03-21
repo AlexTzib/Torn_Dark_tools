@@ -405,10 +405,12 @@
       /* Fly buttons — navigate to travel agency with deep-link hash */
       const flyBtn = e.target.closest('.tpda-trav-fly');
       if (flyBtn) {
+        e.preventDefault();
         const dest = flyBtn.dataset.dest;
         if (dest) {
-          addLog(`Navigating to travel agency for ${dest}`);
-          window.location.href = `${TRAVEL_URL}#tpda_fly=${dest}`;
+          const url = TRAVEL_URL + '#tpda_fly=' + dest;
+          addLog('Navigating to: ' + url);
+          window.location.href = url;
         }
         return;
       }
@@ -416,7 +418,8 @@
       /* Shop button — navigate to abroad shops */
       const shopBtn = e.target.closest('.tpda-trav-shop');
       if (shopBtn) {
-        addLog('Navigating to abroad shops');
+        e.preventDefault();
+        addLog('Navigating to: ' + ABROAD_URL);
         window.location.href = ABROAD_URL;
         return;
       }
@@ -424,7 +427,8 @@
       /* Return home button — navigate to travel agency */
       const returnBtn = e.target.closest('.tpda-trav-return');
       if (returnBtn) {
-        addLog('Navigating to travel agency (return)');
+        e.preventDefault();
+        addLog('Navigating to: ' + TRAVEL_URL);
         window.location.href = TRAVEL_URL;
         return;
       }
