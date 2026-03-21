@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - Traveler Utility
 // @namespace    alex.torn.pda.traveler.bubble
-// @version      1.1.0
-// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Hospital timer, flight ETA, abroad shop links, Swiss Bank & Rehab info. One tap to navigate — game actions are always manual.
+// @version      1.2.0
+// @description  Quick-travel buttons for Mexico, Cayman, Canada, Switzerland. Auto-expands destination on travel page (saves one click). Hospital timer, flight ETA, abroad shop links, Swiss Bank & Rehab info.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
 // @grant        none
@@ -291,13 +291,13 @@
       if (handleApiKeyClick(e, body, () => fetchTravelStatus())) return;
       if (handleLogClick(e, body)) return;
 
-      /* Fly buttons — navigate to travel agency */
+      /* Fly buttons — navigate to travel agency with deep-link hash */
       const flyBtn = e.target.closest('.tpda-trav-fly');
       if (flyBtn) {
         const dest = flyBtn.dataset.dest;
         if (dest) {
           addLog(`Navigating to travel agency for ${dest}`);
-          window.location.href = TRAVEL_URL;
+          window.location.href = `${TRAVEL_URL}#tpda_fly=${dest}`;
         }
         return;
       }
@@ -419,7 +419,7 @@
             <div style="font-weight:bold;color:${c.color};">${c.flag} ${escapeHtml(c.name)}</div>
             <div style="font-size:11px;color:#888;">${escapeHtml(c.items)} \u2022 ${escapeHtml(c.flyTime)}</div>
           </div>
-          <a href="${escapeHtml(TRAVEL_URL)}" class="tpda-trav-fly tpda-trav-btn" data-dest="${escapeHtml(c.id)}"
+          <a href="${escapeHtml(TRAVEL_URL + '#tpda_fly=' + c.id)}" class="tpda-trav-fly tpda-trav-btn" data-dest="${escapeHtml(c.id)}"
              style="background:${c.color};">
             Fly \u2708
           </a>
@@ -526,6 +526,57 @@
     return html;
   }
 
+  /* ── Travel page deep-link ─────────────────────────────────
+   *  When the user taps a Fly button, we navigate to the travel
+   *  page with #tpda_fly=<countryId> in the URL. On the travel
+   *  page our script detects the hash, finds the matching country
+   *  expand button, and clicks it automatically — saving one tap.
+   *  The user still has to manually confirm the "Fly" button.
+   *  This is a UI-navigation assist, not a game-action automation.
+   * ─────────────────────────────────────────────────────────── */
+
+  function handleTravelDeepLink() {
+    if (!/sid=travel/i.test(window.location.search)) return;
+    const match = window.location.hash.match(/tpda_fly=(\w+)/i);
+    if (!match) return;
+
+    const dest = match[1].toLowerCase();
+    const country = COUNTRIES.find(c => c.id === dest);
+    if (!country) return;
+
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    addLog(`Deep link: auto-expanding ${country.name}...`);
+
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (++tries > 20) { clearInterval(timer); addLog('Deep link timed out — expand manually'); return; }
+
+      /* Strategy 1: find expand buttons inside a container that mentions the country name */
+      const expandBtns = document.querySelectorAll('button[class*="expand"], [class*="expand"] button');
+      for (const btn of expandBtns) {
+        const wrapper = btn.closest('li') || btn.closest('[class*="panel"]') || btn.closest('[class*="item"]') || btn.parentElement?.parentElement;
+        if (wrapper && wrapper.textContent.toLowerCase().includes(country.name.toLowerCase())) {
+          btn.click();
+          clearInterval(timer);
+          addLog(`Auto-expanded ${country.name}`);
+          return;
+        }
+      }
+
+      /* Strategy 2: broader search — any clickable near the country name text */
+      const allBtns = document.querySelectorAll('[class*="travel"] button, [class*="destination"] button, [class*="country"] button');
+      for (const btn of allBtns) {
+        const wrapper = btn.closest('li') || btn.parentElement?.parentElement;
+        if (wrapper && wrapper.textContent.toLowerCase().includes(country.name.toLowerCase())) {
+          btn.click();
+          clearInterval(timer);
+          addLog(`Auto-expanded ${country.name} (fallback)`);
+          return;
+        }
+      }
+    }, 500);
+  }
+
   /* ── Init ───────────────────────────────────────────────── */
 
   async function init() {
@@ -533,6 +584,7 @@
     ensureStyles();
     createBubble();
     createPanel();
+    handleTravelDeepLink();
     window.addEventListener('resize', onResize);
     addLog('Traveler Utility initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
   }
