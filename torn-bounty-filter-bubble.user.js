@@ -638,6 +638,8 @@
 
   /** Shared fetch helper: uses PDA_httpGet in PDA, plain fetch outside.
    *  Tracks API call count and handles rate limit errors with retry. */
+  const TORN_API_TIMEOUT_MS = 12000;
+
   async function tornApiGet(url, retries) {
     if (retries == null) retries = 1;
     trackApiCall();
@@ -647,17 +649,27 @@
         const resp = await PDA_httpGet(url, {});
         data = safeJsonParse(resp?.responseText);
       } else {
-        const r = await fetch(url, { method: 'GET' });
-        data = await r.json();
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), TORN_API_TIMEOUT_MS);
+        try {
+          const r = await fetch(url, { method: 'GET', signal: controller.signal });
+          data = await r.json();
+        } finally {
+          clearTimeout(tid);
+        }
       }
     } catch (err) {
-      addLog(`API fetch error: ${err.message || err}`);
+      if (err?.name === 'AbortError') {
+        addLog(`API timeout after ${TORN_API_TIMEOUT_MS / 1000}s: ${url.replace(/key=[^&]+/, 'key=***')}`);
+      } else {
+        addLog(`API fetch error: ${err.message || err}`);
+      }
       return null;
     }
     if (data?.error) {
       const code = data.error.code || 0;
       if (code === 5 && retries > 0) {
-        addLog('Rate limit hit — waiting 5s before retry...');
+        addLog('Rate limit hit \u2014 waiting 5s before retry...');
         await sleep(5000);
         return tornApiGet(url, retries - 1);
       }
@@ -756,6 +768,111 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ── waitForElement: MutationObserver-based DOM polling ─────
+   *  Returns a Promise that resolves when a matching element appears.
+   *  Auto-cleans up after timeout (default 10s). Much more reliable
+   *  than setTimeout polling for Torn's React SPA. */
+
+  function waitForElement(selector, timeoutMs) {
+    if (timeoutMs == null) timeoutMs = 10000;
+    return new Promise(function (resolve, reject) {
+      var el = document.querySelector(selector);
+      if (el) return resolve(el);
+      var obs = new MutationObserver(function () {
+        var found = document.querySelector(selector);
+        if (found) { obs.disconnect(); clearTimeout(tid); resolve(found); }
+      });
+      obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      var tid = setTimeout(function () {
+        obs.disconnect();
+        reject(new Error('waitForElement timeout: ' + selector));
+      }, timeoutMs);
+    });
+  }
+
+  /* ── debounce: delay function execution until calls settle ── */
+
+  function debounce(fn, waitMs) {
+    var timer;
+    return function () {
+      var ctx = this, args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function () { fn.apply(ctx, args); }, waitMs);
+    };
+  }
+
+  /* ── Input validation helpers ────────────────────────────── */
+
+  function validateApiKey(key) {
+    if (!key) return false;
+    return /^[a-zA-Z0-9]{16}$/.test(String(key).trim());
+  }
+
+  function validateFactionId(id) {
+    if (!id) return false;
+    var s = String(id).trim();
+    return /^\d{1,10}$/.test(s) && parseInt(s, 10) > 0;
+  }
+
+  function validateUserId(id) {
+    if (!id) return false;
+    var s = String(id).trim();
+    return /^\d{1,10}$/.test(s) && parseInt(s, 10) > 0;
+  }
+
+  /* ── Batch API helper: parallel requests with throttle ─────
+   *  Runs batches of `concurrency` requests, sleeping `delayMs`
+   *  between batches. Each request is error-isolated so one
+   *  failure won't kill the batch.
+   *
+   *  items:       Array of arbitrary items
+   *  buildUrl:    fn(item) → URL string
+   *  concurrency: parallel requests per batch (default 2)
+   *  delayMs:     ms between batches (default 650)
+   *
+   *  Returns Array of { item, data, error } */
+
+  async function batchApiCalls(items, buildUrl, concurrency, delayMs) {
+    if (concurrency == null) concurrency = 2;
+    if (delayMs == null) delayMs = 650;
+    var results = [];
+    for (var i = 0; i < items.length; i += concurrency) {
+      var batch = items.slice(i, i + concurrency);
+      var batchResults = await Promise.all(batch.map(function (item) {
+        return tornApiGet(buildUrl(item))
+          .then(function (data) { return { item: item, data: data, error: null }; })
+          .catch(function (err) { return { item: item, data: null, error: err }; });
+      }));
+      for (var j = 0; j < batchResults.length; j++) results.push(batchResults[j]);
+      if (i + concurrency < items.length) await sleep(delayMs);
+    }
+    return results;
+  }
+
+  /* ── Torn page data access (zero-cost, no API call) ────────
+   *  Torn stores some user data in window.topBannerInitData.
+   *  Returns the data object if available, or null. */
+
+  function getTornBannerData() {
+    try {
+      return (typeof window !== 'undefined' && window.topBannerInitData &&
+              window.topBannerInitData.user &&
+              window.topBannerInitData.user.data) || null;
+    } catch (_) { return null; }
+  }
+
+  /* ── isTabActive: check if browser tab/PDA tab is focused ── */
+
+  function isTabActive() {
+    try {
+      if (typeof window !== 'undefined' && window.__tornpda &&
+          window.__tornpda.tab && window.__tornpda.tab.state) {
+        return !!window.__tornpda.tab.state.isActiveTab;
+      }
+    } catch (_) { /* not in PDA */ }
+    return typeof document !== 'undefined' ? !document.hidden : true;
+  }
 
   /* ── Cross-origin GET (PDA native HTTP with fetch fallback) ──
    *  Used for external APIs like TornW3B (weav3r.dev).

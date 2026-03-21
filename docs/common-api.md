@@ -31,16 +31,20 @@ after the common code is injected. Scripts must define these variables
 8. [Draggable Behavior](#draggable-behavior)
 9. [Expand / Collapse / Resize](#expand--collapse--resize)
 10. [Network Interception](#network-interception)
-11. [Stat Estimation](#stat-estimation)
-12. [Profile Cache](#profile-cache)
-13. [Cross-Origin HTTP](#cross-origin-http)
-14. [Profit Calculator](#profit-calculator)
-15. [Notifications](#notifications)
-16. [Member Data Processing](#member-data-processing)
-17. [War-Shared Helpers](#war-shared-helpers)
-18. [Faction War Detection](#faction-war-detection)
-19. [Script Lifecycle Hooks](#script-lifecycle-hooks)
-20. [New Script Checklist](#new-script-checklist)
+11. [API Calls](#api-calls)
+12. [Stat Estimation](#stat-estimation)
+13. [Profile Cache](#profile-cache)
+14. [Cross-Origin HTTP](#cross-origin-http)
+15. [Profit Calculator](#profit-calculator)
+16. [Notifications](#notifications)
+17. [Member Data Processing](#member-data-processing)
+18. [War-Shared Helpers](#war-shared-helpers)
+19. [Faction War Detection](#faction-war-detection)
+20. [DOM Helpers](#dom-helpers)
+21. [Input Validation](#input-validation)
+22. [Page Data Access](#page-data-access)
+23. [Script Lifecycle Hooks](#script-lifecycle-hooks)
+24. [New Script Checklist](#new-script-checklist)
 
 ---
 
@@ -88,6 +92,15 @@ Escapes `& < > " '` for safe HTML insertion.
 
 ### `sleep(ms)`
 `await sleep(500)` — promise-based delay.
+
+### `debounce(fn, waitMs)`
+Returns a debounced version of `fn` that delays execution until
+`waitMs` milliseconds have elapsed since the last call. Useful for
+filter inputs, search fields, and resize handlers.
+```js
+const debouncedSearch = debounce(filterTargets, 300);
+input.addEventListener('input', debouncedSearch);
+```
 
 ---
 
@@ -272,6 +285,64 @@ Returns `https://www.torn.com/loader.php?sid=attack&user2ID={id}`.
 
 ---
 
+## API Calls
+
+### Constants
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `TORN_API_TIMEOUT_MS` | `12000` | Fetch timeout for non-PDA API calls (12 seconds) |
+
+### `tornApiGet(url, retries)`
+Shared fetch helper. Uses `PDA_httpGet` inside Torn PDA, plain `fetch`
+with **AbortController timeout** (12s) outside PDA. Tracks API call count.
+Retries once on rate limit (error code 5) with 5-second delay.
+Returns parsed JSON or `null` on error.
+
+```js
+const data = await tornApiGet(`https://api.torn.com/user/?selections=bars&key=${STATE.apiKey}&_tpda=1`);
+```
+
+> **Note:** The AbortController timeout only applies to non-PDA fetch.
+> PDA_httpGet has its own internal timeout managed by Flutter.
+> API key is masked in timeout log messages for security.
+
+### `batchApiCalls(items, buildUrl, concurrency, delayMs)`
+Runs batched API requests in parallel with throttling. Each request
+is error-isolated — one failure won't kill the batch.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `items` | — | Array of items to process |
+| `buildUrl` | — | `fn(item)` → API URL string |
+| `concurrency` | `2` | Parallel requests per batch |
+| `delayMs` | `650` | ms to sleep between batches |
+
+Returns `Array<{ item, data, error }>`.
+
+```js
+const memberIds = ['123', '456', '789', '101'];
+const results = await batchApiCalls(
+  memberIds,
+  (id) => `https://api.torn.com/user/${id}?selections=profile&key=${STATE.apiKey}&_tpda=1`,
+  2,   // 2 parallel
+  650  // 650ms between batches
+);
+for (const { item: id, data, error } of results) {
+  if (error) { addLog(`Failed ${id}: ${error}`); continue; }
+  // process data...
+}
+```
+
+> **Performance:** Scanning 20 profiles with concurrency=2 takes ~7s
+> vs ~13s sequential (650ms × 20). With concurrency=3, ~5s.
+
+### `trackApiCall()` / `getApiCallsPerMinute()` / `getApiCallTotal()`
+Internal API call rate tracking. `trackApiCall()` is called automatically
+by `tornApiGet()`. Use `getApiCallsPerMinute()` to display rate in UI.
+
+---
+
 ## Stat Estimation
 
 ### Constants
@@ -389,6 +460,87 @@ multiple fallback strategies for finding remaining time.
 Fetches `/faction/?selections=basic` and inspects war data.
 Returns `{ ownFactionId, ownFactionName, wars }` where each war
 includes `{ enemyFactionId, enemyFactionName, type, start, startsIn }`.
+
+---
+
+## DOM Helpers
+
+### `waitForElement(selector, timeoutMs)`
+Returns a Promise that resolves with the first matching DOM element.
+Uses MutationObserver internally — much more reliable than `setTimeout`
+polling for Torn's React SPA where elements appear asynchronously.
+Auto-disconnects on timeout (default 10 seconds).
+
+```js
+try {
+  const el = await waitForElement('[class*="travelStatus___"]', 8000);
+  // el is now the matching DOM element
+} catch (err) {
+  addLog('Travel status element not found');
+}
+```
+
+> **Use instead of** the old `setTimeout` polling pattern with retries.
+> The observer fires immediately when the element appears rather than
+> waiting for the next poll interval. Auto-cleanup prevents memory leaks.
+
+---
+
+## Input Validation
+
+### `validateApiKey(key)`
+Returns `true` if `key` is a valid 16-character alphanumeric Torn API key.
+```js
+if (!validateApiKey(inputValue)) {
+  addLog('Invalid API key format');
+  return;
+}
+```
+
+### `validateFactionId(id)`
+Returns `true` if `id` is a valid numeric faction ID (1-10 digits, > 0).
+
+### `validateUserId(id)`
+Returns `true` if `id` is a valid numeric user/player ID (1-10 digits, > 0).
+
+---
+
+## Page Data Access
+
+### `getTornBannerData()`
+Reads `window.topBannerInitData.user.data` — a global object where Torn
+stores some user data without requiring an API call. Returns the data
+object or `null` if unavailable.
+
+**Known fields:**
+- `.hospitalStamp` — Hospital end timestamp (Unix)
+- More fields may be available — explore in browser console
+
+```js
+const banner = getTornBannerData();
+if (banner && banner.hospitalStamp) {
+  const hospEndTs = banner.hospitalStamp;
+  const secondsLeft = hospEndTs - Math.floor(Date.now() / 1000);
+  addLog(`Hospital: ${formatSeconds(secondsLeft)} left (from banner data)`);
+}
+```
+
+> **Zero-cost:** No API call needed. Data is already in the page's JS context.
+
+### `isTabActive()`
+Returns `true` if the current tab/PDA tab is focused/active.
+In Torn PDA, checks `window.__tornpda.tab.state.isActiveTab`.
+Outside PDA, checks `document.hidden`.
+
+```js
+if (!isTabActive()) {
+  addLog('Tab inactive — skipping poll');
+  return;
+}
+```
+
+> **Use for:** Skipping API polls, timer updates, or expensive DOM
+> operations when the user isn't looking. Saves battery on mobile/PDA.
 
 ---
 
