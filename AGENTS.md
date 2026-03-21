@@ -43,7 +43,8 @@ Torn_Dark_tools/
 │   ├── torn-strip-poker.src.js            ← Strip Poker Advisor source
 │   ├── torn-war-manager.src.js            ← War Manager source
 │   ├── torn-bounty-filter.src.js          ← Bounty Filter source
-│   └── torn-market-sniper.src.js          ← Market Sniper source
+│   ├── torn-market-sniper.src.js          ← Market Sniper source
+│   └── torn-traveler-utility.src.js       ← Traveler Utility source
 ├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
@@ -57,7 +58,9 @@ Torn_Dark_tools/
 ├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble (built output)
 ├── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
 ├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
-└── torn-market-sniper-bubble.md           ← Market Sniper documentation
+├── torn-market-sniper-bubble.md           ← Market Sniper documentation
+├── torn-traveler-utility-bubble.user.js   ← Traveler Utility bubble (built output)
+└── torn-traveler-utility.md               ← Traveler Utility documentation
 ```
 
 - **Remote:** `https://github.com/AlexTzib/Torn_Dark_tools.git`
@@ -275,6 +278,7 @@ Each script uses a unique z-index base so they can coexist:
 
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
+| Traveler Utility | 999935 | `tpda-traveler-bubble` | `tpda-traveler-panel` |
 | Market Sniper | 999940 | `tpda-mkt-bubble` | `tpda-mkt-panel` |
 | War Manager | 999945 | `tpda-war-mgr-bubble` | `tpda-war-mgr-panel` |
 | Bounty Filter | 999950 | `tpda-bounty-bubble` | `tpda-bounty-panel` |
@@ -283,7 +287,7 @@ Each script uses a unique z-index base so they can coexist:
 | Plushie Prices | 999980 | `tpda-plushie-bubble` | `tpda-plushie-panel` |
 | AI Advisor | 999990 | `tpda-safe-ai-bubble` | `tpda-safe-ai-panel` |
 
-When adding a new script, pick a z-index base that doesn't collide (e.g., 999935).
+When adding a new script, pick a z-index base that doesn't collide (e.g., 999930).
 
 ### localStorage Keys
 
@@ -298,6 +302,7 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | War Manager | `tpda_war_manager_v1` | `_bubble_pos`, `_panel_pos`, `_threshold_pct`, `_poll_ms`, `_enemy_faction_id` |
 | Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters`, `_bounty_cache`, `_status_cache` |
 | Market Sniper | `tpda_market_sniper_v1` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_watchlist`, `_prices`, `_dismissed`, `_filters` |
+| Traveler Utility | `tpda_traveler_v1` | `_api_key`, `_bubble_pos`, `_panel_pos` |
 
 ### Debug Log Pattern
 
@@ -613,6 +618,43 @@ Every script has:
 - Caching prevents redundant calls (5-min TTL)
 - Dismissed deals persist for 1 hour in localStorage
 
+### Traveler Utility (`torn-traveler-utility-bubble.user.js`)
+
+**Purpose:** Quick-travel navigation tool. Shows current travel status (in Torn / abroad / flying) and provides one-tap navigation buttons for Mexico, Cayman Islands, and Canada. Context-sensitive: shows fly-to buttons when in Torn, shop + return buttons when abroad, ETA countdown when flying.
+
+**Design:**
+- **56 px bubble** with blue gradient, airplane icon
+- **340 px panel** — status card + context-sensitive action buttons
+- **z-index base 999935** — lowest of all scripts
+- **Single API endpoint:** `user/?selections=travel,profile` for travel status
+
+**Key constants:**
+- `COUNTRIES` — Array of 3 objects `{ id, name, flag, color, items, flyTime }` for Mexico, Cayman, Canada
+- `TRAVEL_URL` — `https://www.torn.com/page.php?sid=travel`
+- `ABROAD_URL` — `https://www.torn.com/shops.php?step=abroad`
+- `POLL_MS = 30000` — refresh travel status every 30 seconds
+
+**Key functions:**
+- `fetchTravelStatus()` — Fetches `api.torn.com/user/?selections=travel,profile`; uses `PDA_httpGet` if available, falls back to `fetch()`
+- `parseTravelData(data)` — Determines `STATE.location` (torn/abroad/traveling) and `STATE.abroadCountry` from API response
+- `extractCountryFromStatus(desc)` — Regex extraction of country name from status description string
+- `renderStatusCard()` — Shows current location, destination (if traveling), ETA (if flying), last update time
+- `renderTornCard()` — When in Torn: fly-to buttons for each country with flag, items, and approximate fly time
+- `renderAbroadCard()` — When abroad: shop button (for non-banking countries), banking info (for Cayman), return-home button
+- `renderTravelingCard()` — When flying: progress bar, ETA countdown, arrival tips for destination
+- `onPanelExpand()` / `onPanelCollapse()` — Start/stop polling on panel open/close
+
+**Data flow:**
+1. API key resolved (PDA > manual > intercepted)
+2. On panel open: `fetchTravelStatus()` + start 30s polling
+3. `parseTravelData()` determines location from travel + status data
+4. `renderPanel()` shows status card + context-appropriate action cards
+5. All buttons navigate to Torn pages; no game actions performed
+
+**API usage:**
+- 1 call per 30s poll cycle, only while panel is open
+- Tagged with `&_tpda=1` to avoid fetch/XHR hook double-processing
+
 ### War Manager (`torn-war-manager.user.js`)
 
 **Purpose:** War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage threshold, online enemy report with attack links, generates copy-paste assignment messages.
@@ -888,6 +930,7 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 | `torn` (v2) | `bounties` (via `/v2/torn/?selections=bounties`) | Bounty Filter | Current bounty list (v2-only since March 2025, returns array) |
 | `user` (by ID) | `profile` | Bounty Filter, War Bubble, War Manager | Target state, timers, stat estimation |
 | `user` (by ID) | `profile,personalstats,criminalrecord` | War Bubble, War Manager | Full profile for stat estimation |
+| `user` | `travel,profile` | Traveler Utility | Travel status, destination, time remaining |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
 
@@ -900,6 +943,7 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
   - War Manager: 2 faction calls + N profile scans (650ms gaps), configurable 30s–10min intervals
   - Plushie Prices: 13 calls per refresh, 250ms apart (~52/min), cached for 10 minutes
   - Market Sniper: 16 calls per scan, 300ms apart (~32/min), cached for 5 minutes
+  - Traveler Utility: 1 call per 30s (~2/min), only when panel is open
 
 ### Key API Response Fields (Faction Basic)
 

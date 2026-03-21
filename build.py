@@ -29,6 +29,7 @@ SCRIPTS = {
     'torn-war-manager.src.js':         'torn-war-manager.user.js',
     'torn-bounty-filter.src.js':       'torn-bounty-filter-bubble.user.js',
     'torn-market-sniper.src.js':       'torn-market-sniper-bubble.user.js',
+    'torn-traveler-utility.src.js':    'torn-traveler-utility-bubble.user.js',
 }
 
 

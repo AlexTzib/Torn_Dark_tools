@@ -78,6 +78,17 @@ A war target assignment manager that scans both your faction and the enemy facti
 - **Configurable polling** — 30s / 1min / 2min / 5min / 10min refresh rate
 - **Auto enemy detection** — detects enemy faction from URL, page links, or API war data
 
+### Traveler Utility (Blue airplane bubble)
+
+A quick-travel navigation tool. Shows your current travel status and provides one-tap buttons to navigate to common destinations.
+
+- **Travel status** — shows whether you're in Torn, abroad, or in flight with ETA countdown
+- **Quick-travel buttons** — one tap to open the travel agency page for Mexico, Cayman Islands, or Canada
+- **Abroad actions** — when abroad: open the shop page, or fly back to Torn
+- **In-flight ETA** — progress bar and countdown timer while traveling
+- **Arrival tips** — contextual tips for what to do when you arrive at your destination
+- **Auto-polling** — refreshes travel status every 30 seconds while the panel is open
+
 ---
 
 ## Scripts
@@ -91,6 +102,7 @@ A war target assignment manager that scans both your faction and the enemy facti
 | [**War Manager**](torn-war-manager-bubble.md) | Orange "MGR" | War target assignment, stat estimation, online enemy report, message generation | `faction/?selections=basic` + `user/{id}?selections=profile,personalstats,criminalrecord` |
 | [**Bounty Filter**](torn-bounty-filter-bubble.md) | Orange "BTY" | Filter bounties by state (hospital/jail/abroad/in Torn), hospital timers, level, reward | `torn/?selections=bounties` + `user/{id}?selections=profile` |
 | [**Market Sniper**](torn-market-sniper-bubble.md) | Green "MKT" | Market profit finder — scans watchlist items for underpriced deals, shows profit/ROI | `/v2/market/{id}/itemmarket` + TornW3B bazaar (16 calls per scan) |
+| [**Traveler Utility**](torn-traveler-utility.md) | Blue airplane | Quick-travel navigation, travel status, abroad shop links, flight ETA | `user/?selections=travel,profile` (1 call per 30s) |
 
 ---
 
@@ -111,6 +123,7 @@ Every script adheres to Torn's core rule: **one click = one action**. None of th
 - **War Bubble** makes **one** read-only API call per polling cycle (configurable: 30s / 1min / 2min / 5min / 10min, only while the panel is open) using the minimum `selections=basic` endpoint.
 - **Strip Poker Advisor** makes **zero** API calls — it runs entirely on client-side poker math (Monte Carlo simulation).
 - **Market Sniper** makes **16** API calls per scan (8 watchlist items × 2 sources). Calls are spaced 300ms apart. Prices are cached for 5 minutes.
+- **Traveler Utility** makes **1** API call per 30-second poll cycle (only while the panel is open).
 
 ### 3. Transparent API Key Handling
 
@@ -136,15 +149,15 @@ All scripts that need an API key use a three-tier priority system:
 
 ## Torn Policy Compliance Summary
 
-| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker | War Manager | Bounty Filter | Market Sniper |
-|---|---|---|---|---|---|---|---|
-| No game-action automation | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| One-click-one-action | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted |
-| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all | Only `api.torn.com` | Only `api.torn.com` | `api.torn.com` + `weav3r.dev` (item IDs only) |
-| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) | 2 faction + N profile calls, 650ms gaps | 1 + up to 30 calls, 350ms gaps, 1-2 min cache | 16 calls per scan, 300ms apart, 5-min cache |
-| No request modification | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| Read-only display | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker | War Manager | Bounty Filter | Market Sniper | Traveler Utility |
+|---|---|---|---|---|---|---|---|---|
+| No game-action automation | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| One-click-one-action | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted |
+| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all | Only `api.torn.com` | Only `api.torn.com` | `api.torn.com` + `weav3r.dev` (item IDs only) | Only `api.torn.com` |
+| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) | 2 faction + N profile calls, 650ms gaps | 1 + up to 30 calls, 350ms gaps, 1-2 min cache | 16 calls per scan, 300ms apart, 5-min cache | 1 call per 30s (~2/min) |
+| No request modification | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| Read-only display | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
 
 For a detailed compliance breakdown, see each script's individual documentation in the `docs/` folder.
 
@@ -152,7 +165,7 @@ For a detailed compliance breakdown, see each script's individual documentation 
 
 ## Shared Architecture
 
-All seven scripts share a common bubble/panel architecture:
+All eight scripts share a common bubble/panel architecture:
 
 ```
 ┌─────────────┐     click      ┌──────────────────┐
@@ -210,7 +223,7 @@ All seven scripts share a common bubble/panel architecture:
 4. Navigate to `torn.com` — the bubble(s) will appear
 
 ### Multiple Scripts
-All seven scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
+All eight scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
 
 ---
 
@@ -232,7 +245,8 @@ Torn_Dark_tools/
 │   ├── torn-war-bubble.src.js             ← War Bubble source
 │   ├── torn-strip-poker-bubble.src.js     ← Strip Poker Advisor source
 │   ├── torn-bounty-filter-bubble.src.js   ← Bounty Filter source
-│   └── torn-market-sniper.src.js          ← Market Sniper source
+│   ├── torn-market-sniper.src.js          ← Market Sniper source
+│   └── torn-traveler-utility.src.js       ← Traveler Utility source
 ├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
@@ -244,7 +258,9 @@ Torn_Dark_tools/
 ├── torn-bounty-filter-bubble.user.js      ← Bounty Filter bubble (built output)
 ├── torn-bounty-filter-bubble.md           ← Bounty Filter documentation
 ├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
-└── torn-market-sniper-bubble.md           ← Market Sniper documentation
+├── torn-market-sniper-bubble.md           ← Market Sniper documentation
+├── torn-traveler-utility-bubble.user.js   ← Traveler Utility bubble (built output)
+└── torn-traveler-utility.md               ← Traveler Utility documentation
 ```
 
 ---
