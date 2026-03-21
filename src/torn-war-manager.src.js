@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.6.1
-// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, online enemy report with attack links, generates copy-paste messages
+// @version      1.7.0
+// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, API call counter with rate limit protection, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
@@ -81,10 +81,10 @@
   async function fetchOwnFactionMembers() {
     if (!STATE.apiKey) return;
     try {
-      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
       addLog('Fetching own faction members...');
-      const res = await fetch(url, { method: 'GET' });
-      const data = await res.json();
+      const data = await tornApiGet(url);
+      if (!data) { addLog('Own faction: no response'); return; }
       if (data?.error) {
         addLog('Own faction API error: ' + (data.error.error || JSON.stringify(data.error)));
         return;
@@ -123,10 +123,10 @@
     if (!STATE.apiKey || !STATE.enemyFactionId) return;
     STATE.lastError = '';
     try {
-      const url = `https://api.torn.com/faction/${encodeURIComponent(STATE.enemyFactionId)}?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      const url = `https://api.torn.com/faction/${encodeURIComponent(STATE.enemyFactionId)}?selections=basic&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
       addLog('Fetching enemy faction members...');
-      const res = await fetch(url, { method: 'GET' });
-      const data = await res.json();
+      const data = await tornApiGet(url);
+      if (!data) { addLog('Enemy faction: no response'); return; }
       if (data?.error) {
         STATE.lastError = 'Enemy faction API error: ' + (data.error.error || JSON.stringify(data.error));
         addLog(STATE.lastError);
@@ -220,7 +220,13 @@
       if (!STATE.scanning) break;
       STATE.scanProgress = i + 1;
       await fetchMemberProfile(toScan[i]);
-      if (i < toScan.length - 1) await sleep(SCAN_API_GAP_MS);
+      if (i < toScan.length - 1) {
+        /* Adaptive throttle: slow down when approaching API rate limit */
+        const cpm = getApiCallsPerMinute();
+        const gap = cpm >= 80 ? 3000 : cpm >= 60 ? 1500 : SCAN_API_GAP_MS;
+        if (gap > SCAN_API_GAP_MS) addLog(`Throttling scan: ${cpm} calls/min, gap ${gap}ms`);
+        await sleep(gap);
+      }
       if ((i + 1) % 5 === 0 || i === toScan.length - 1) {
         computeAssignments();
         renderPanel();
@@ -644,9 +650,14 @@
   }
 
   function renderActionBar() {
+    const callsMin = getApiCallsPerMinute();
+    const callsTotal = getApiCallTotal();
+    const rateColor = callsMin >= 80 ? '#f44' : callsMin >= 50 ? '#ffc107' : '#4caf50';
+    const rateWarning = callsMin >= 80 ? ' SLOW DOWN' : '';
+
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
           <button id="tpda-mgr-scan" style="background:${STATE.scanning ? '#d64545' : '#e67e22'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
             ${STATE.scanning ? 'Stop Scan' : 'Scan All Stats'}
           </button>
@@ -658,6 +669,14 @@
               ? `Scanning... ${STATE.scanProgress}/${STATE.scanTotal}`
               : `${Object.keys(STATE.profileCache).length} profiles cached`}
           </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid #2f3340;border-radius:8px;background:#0f1116;">
+          <span style="font-size:11px;color:#bbb;">API:</span>
+          <span style="font-size:12px;font-weight:bold;color:${rateColor};">${callsMin}/min</span>
+          <span style="font-size:11px;color:#888;">(limit 100)</span>
+          <span style="font-size:11px;color:#666;">|</span>
+          <span style="font-size:11px;color:#bbb;">${callsTotal} total this session</span>
+          ${rateWarning ? `<span style="font-size:11px;color:#f44;font-weight:bold;">${rateWarning}</span>` : ''}
         </div>
       </div>`;
   }

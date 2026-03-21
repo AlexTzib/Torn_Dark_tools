@@ -596,6 +596,54 @@
   const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
 
+  /* ── API call tracking ────────────────────────────────────── */
+  const _apiCallLog = [];  // timestamps (ms) of calls in last 60s
+  let _apiCallTotal = 0;   // total calls this session
+
+  function trackApiCall() {
+    const now = Date.now();
+    _apiCallLog.push(now);
+    _apiCallTotal++;
+    while (_apiCallLog.length && _apiCallLog[0] < now - 60000) _apiCallLog.shift();
+  }
+
+  function getApiCallsPerMinute() {
+    const now = Date.now();
+    while (_apiCallLog.length && _apiCallLog[0] < now - 60000) _apiCallLog.shift();
+    return _apiCallLog.length;
+  }
+
+  function getApiCallTotal() { return _apiCallTotal; }
+
+  /** Shared fetch helper: uses PDA_httpGet in PDA, plain fetch outside.
+   *  Tracks API call count and handles rate limit errors with retry. */
+  async function tornApiGet(url, retries) {
+    if (retries == null) retries = 1;
+    trackApiCall();
+    let data;
+    try {
+      if (typeof PDA_httpGet === 'function') {
+        const resp = await PDA_httpGet(url, {});
+        data = safeJsonParse(resp?.responseText);
+      } else {
+        const r = await fetch(url, { method: 'GET' });
+        data = await r.json();
+      }
+    } catch (err) {
+      addLog(`API fetch error: ${err.message || err}`);
+      return null;
+    }
+    if (data?.error) {
+      const code = data.error.code || 0;
+      if (code === 5 && retries > 0) {
+        addLog('Rate limit hit — waiting 5s before retry...');
+        await sleep(5000);
+        return tornApiGet(url, retries - 1);
+      }
+    }
+    return data;
+  }
+
   function matchRank(rank) {
     if (!rank) return 0;
     const r = String(rank).trim();
@@ -646,14 +694,8 @@
 
     try {
       const url = `https://api.torn.com/user/${encodeURIComponent(memberId)}?selections=profile,personalstats,criminalrecord&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
-      let data;
-      if (typeof PDA_httpGet === 'function') {
-        const resp = await PDA_httpGet(url, {});
-        data = safeJsonParse(resp?.responseText);
-      } else {
-        const r = await fetch(url, { method: 'GET' });
-        data = await r.json();
-      }
+      const data = await tornApiGet(url);
+      if (!data) return null;
       if (data?.error) {
         addLog(`Profile ${memberId}: API error ${data.error.code || data.error.error || ''}`);
         return null;
@@ -1013,10 +1055,10 @@
   async function fetchOwnFactionWars() {
     if (!STATE.apiKey) return null;
     try {
-      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}`;
+      const url = `https://api.torn.com/faction/?selections=basic&key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
       addLog('Fetching own faction data for war detection...');
-      const res = await fetch(url, { method: 'GET' });
-      const data = await res.json();
+      const data = await tornApiGet(url);
+      if (!data) return null;
       if (data?.error) {
         addLog('Own faction API error: ' + (data.error.error || JSON.stringify(data.error)));
         return null;
