@@ -127,8 +127,14 @@
     if (STATE.location === 'traveling' && STATE.travel && STATE.lastFetchTs) {
       const elapsed = Math.floor((Date.now() - STATE.lastFetchTs) / 1000);
       const timeLeft = Math.max(0, (STATE.travel.time_left || 0) - elapsed);
+      const timeStr = formatSeconds(timeLeft);
+
+      /* Update all ETA displays */
       const etaEl = document.getElementById('tpda-trav-flight-eta');
-      if (etaEl) etaEl.textContent = formatSeconds(timeLeft);
+      if (etaEl) etaEl.textContent = timeStr;
+      const statusEta = document.getElementById('tpda-trav-status-eta');
+      if (statusEta) statusEta.textContent = timeStr;
+
       const barEl = document.getElementById('tpda-trav-flight-bar');
       if (barEl) {
         const maxSec = Number(barEl.dataset.max) || (45 * 60);
@@ -448,12 +454,13 @@
     let statusHtml = '';
 
     if (STATE.location === 'traveling') {
-      const timeLeft = STATE.travel?.time_left || 0;
+      const elapsed = STATE.lastFetchTs ? Math.floor((Date.now() - STATE.lastFetchTs) / 1000) : 0;
+      const timeLeft = Math.max(0, (STATE.travel?.time_left || 0) - elapsed);
       const dest = STATE.abroadCountry || 'Unknown';
       statusHtml = `
         <div style="font-size:14px;color:#42a5f5;font-weight:bold;margin-bottom:4px;">\u2708\uFE0F In Flight</div>
         <div>Destination: <strong>${escapeHtml(dest)}</strong></div>
-        ${timeLeft > 0 ? `<div>ETA: <strong style="color:#ffd700;">${formatSeconds(timeLeft)}</strong></div>` : '<div>Arriving soon...</div>'}
+        ${timeLeft > 0 ? `<div>ETA: <strong id="tpda-trav-status-eta" style="color:#ffd700;">${formatSeconds(timeLeft)}</strong></div>` : '<div>Arriving soon...</div>'}
       `;
     } else if (STATE.location === 'abroad') {
       statusHtml = `
@@ -593,7 +600,8 @@
   /* When traveling — show ETA countdown */
   function renderTravelingCard() {
     const dest = STATE.abroadCountry || 'Unknown';
-    const timeLeft = STATE.travel?.time_left || 0;
+    const elapsed = STATE.lastFetchTs ? Math.floor((Date.now() - STATE.lastFetchTs) / 1000) : 0;
+    const timeLeft = Math.max(0, (STATE.travel?.time_left || 0) - elapsed);
     const country = COUNTRIES.find(c => dest.toLowerCase().includes(c.id));
     const color = country ? country.color : '#42a5f5';
 
