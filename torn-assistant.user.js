@@ -580,7 +580,7 @@
   }
 
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
-  const PROFILE_CACHE_TTL = 30 * 60 * 1000; // 30 min
+  const PROFILE_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours — use Refresh Stats to force re-scan
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
 
   /* ── API call tracking ────────────────────────────────────── */
@@ -672,6 +672,12 @@
 
   function saveProfileCache() {
     setStorage(PROFILE_CACHE_KEY, STATE.profileCache);
+  }
+
+  function clearProfileCache() {
+    STATE.profileCache = {};
+    setStorage(PROFILE_CACHE_KEY, {});
+    addLog('Profile cache cleared');
   }
 
   async function fetchMemberProfile(memberId) {

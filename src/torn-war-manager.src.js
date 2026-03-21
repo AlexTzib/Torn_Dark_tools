@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.7.0
-// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat percentage, API call counter with rate limit protection, online enemy report with attack links, generates copy-paste messages
+// @version      1.8.0
+// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat comparison, API call counter with rate limit protection, collapsible UI sections, online enemy report with attack links, generates copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
@@ -29,7 +29,6 @@
     { label: '10 min', ms: 600000 }
   ];
   const DEFAULT_POLL_MS = 120000;
-  const DEFAULT_THRESHOLD_PCT = 120;
 
   const STATE = {
     apiKey: null,
@@ -45,7 +44,6 @@
     lastError: '',
     pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
-    thresholdPct: loadThresholdPct(),
     reportCollapsed: { inTorn: false, hospital: true, abroad: true, offlineRecent: true, offlineOld: true },
     selectedMemberId: null, // currently selected own-faction member for target list
     assignments: [],       // { own, enemy } pairs
@@ -54,6 +52,10 @@
     scanning: false,
     scanProgress: 0,
     scanTotal: 0,
+    scanOnlineOnly: true,  // default: scan only online members
+    factionIdCollapsed: true,
+    ownMembersCollapsed: true,
+    enemyAvailableCollapsed: true,
     ui: {
       minimized: true,
       zIndexBase: 999945
@@ -66,15 +68,6 @@
   /* ── Storage helpers ───────────────────────────────────────── */
   /* loadPollMs/savePollMs, getManualEnemyFactionId/setManualEnemyFactionId
      are provided by common.js */
-
-  function loadThresholdPct() {
-    const saved = getStorage(`${SCRIPT_KEY}_threshold_pct`, DEFAULT_THRESHOLD_PCT);
-    return Math.max(10, Math.min(200, Number(saved) || DEFAULT_THRESHOLD_PCT));
-  }
-
-  function saveThresholdPct(pct) {
-    setStorage(`${SCRIPT_KEY}_threshold_pct`, pct);
-  }
 
   /* ── Faction data fetching ─────────────────────────────────── */
 
@@ -191,11 +184,14 @@
     if (STATE.scanning) { STATE.scanning = false; return; }
     if (!STATE.apiKey) { addLog('No API key for scan'); return; }
 
-    // Only scan online own members (skip offline to save API calls) + all enemies
+    // Own members: always scan only online (no point scanning offline allies)
+    // Enemies: scan online-only or all based on toggle
     const ownOnlineIds = STATE.ownMembers
       .filter(m => m.isOnline)
       .map(m => m.id);
-    const enemyIds = STATE.enemyMembers.map(m => m.id);
+    const enemyIds = STATE.scanOnlineOnly
+      ? STATE.enemyMembers.filter(m => m.isOnline).map(m => m.id)
+      : STATE.enemyMembers.map(m => m.id);
     const allIds = [...ownOnlineIds, ...enemyIds].filter(Boolean);
 
     const toScan = allIds.filter(id => {
@@ -242,15 +238,10 @@
 
   /* ── Target assignment algorithm ───────────────────────────── */
 
-  /* Stat midpoints are community-sourced approximations.
-     Multiply by 0.7 to be conservative — better to assign slightly
-     weaker targets than ones that are too strong. */
-  const STAT_SAFETY_FACTOR = 0.7;
-
   function enrichWithStats(members) {
     return members.map(m => {
       const p = STATE.profileCache[m.id];
-      return { ...m, estimate: p?.estimate || null, midpoint: p ? Math.round(rankToMidpoint(p.rank) * STAT_SAFETY_FACTOR) : 0 };
+      return { ...m, estimate: p?.estimate || null, midpoint: p ? rankToMidpoint(p.rank) : 0 };
     });
   }
 
@@ -268,14 +259,11 @@
     });
   }
 
-  function getTargetsForMember(ownMember, enemies, pct) {
-    const maxStats = ownMember.midpoint * pct;
-    return enemies.filter(e => e.estimate && e.midpoint <= maxStats);
+  function getTargetsForMember(ownMember, enemies) {
+    return enemies.filter(e => e.estimate && e.midpoint <= ownMember.midpoint);
   }
 
   function computeAssignments() {
-    const pct = STATE.thresholdPct / 100;
-
     // Include all online own members in Torn; those without estimates get midpoint 0
     const ownAvailable = enrichWithStats(
       STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn')
@@ -293,7 +281,7 @@
     for (const own of ownAvailable) {
       if (!own.estimate) continue;
       const best = allEnemies.find(e =>
-        !assigned.has(e.id) && e.estimate && e.midpoint <= own.midpoint * pct
+        !assigned.has(e.id) && e.estimate && e.midpoint <= own.midpoint
       );
       if (best) {
         assigned.add(best.id);
@@ -314,12 +302,11 @@
     STATE.assignments = assignments;
     const scannedOwn = ownAvailable.filter(m => m.estimate).length;
     const scannedEnemy = allEnemies.filter(m => m.estimate).length;
-    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} online, ${scannedOwn} scanned | ${allEnemies.length} enemies, ${scannedEnemy} scanned, ${STATE.thresholdPct}%)`);
+    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} online, ${scannedOwn} scanned | ${allEnemies.length} enemies, ${scannedEnemy} scanned)`);
   }
 
   function getSelectedMemberTargets() {
     if (!STATE.selectedMemberId) return [];
-    const pct = STATE.thresholdPct / 100;
 
     const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
     if (!own) return [];
@@ -332,7 +319,7 @@
     // If own member has no estimate, return all enemies sorted by priority
     if (!ownEnriched.estimate) return enemies;
 
-    return getTargetsForMember(ownEnriched, enemies, pct);
+    return getTargetsForMember(ownEnriched, enemies);
   }
 
   /* ── Message generation ────────────────────────────────────── */
@@ -586,14 +573,13 @@
       ${renderWarStatusCard(ownOnline, enemyOnline, enemyHospital)}
       ${renderApiKeyCard()}
       ${renderFactionIdCard()}
-      ${renderSettingsCard()}
       ${renderActionBar()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
       ${renderMemberSelector(ownOnline)}
       ${renderSelectedTargetList()}
       ${renderEnemyReport()}
       ${renderAssignmentsCard()}
-      ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy')}
+      ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy', 'enemyAvailableCollapsed')}
       ${renderLogCard()}
     `;
 
@@ -617,35 +603,21 @@
   }
 
   function renderFactionIdCard() {
+    const c = STATE.factionIdCollapsed;
+    const arrow = c ? '\u25B6' : '\u25BC';
+    const fid = STATE.enemyFactionId || getManualEnemyFactionId() || '';
+    const summary = fid ? ` <span style="color:#888;font-size:11px;">(${escapeHtml(fid)})</span>` : '';
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
-        <div style="font-weight:bold;margin-bottom:6px;">Enemy Faction ID</div>
-        <div style="display:flex;gap:8px;">
+        <div id="tpda-mgr-fid-toggle" style="font-weight:bold;cursor:pointer;user-select:none;">
+          ${arrow} Enemy Faction ID${c ? summary : ''}
+        </div>
+        ${c ? '' : `
+        <div style="display:flex;gap:8px;margin-top:8px;">
           <input id="tpda-mgr-faction-input" type="text" value="${escapeHtml(getManualEnemyFactionId())}" placeholder="Enemy faction ID"
                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
           <button id="tpda-mgr-save-id" style="background:#444;color:white;border:none;border-radius:8px;padding:8px 10px;">Save</button>
-        </div>
-      </div>`;
-  }
-
-  function renderSettingsCard() {
-    return `
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
-        <div style="font-weight:bold;margin-bottom:6px;">Settings</div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-          <label style="font-size:12px;color:#bbb;white-space:nowrap;">Stat threshold:</label>
-          <input id="tpda-mgr-threshold" type="number" min="10" max="200" step="5" value="${STATE.thresholdPct}"
-                 style="width:60px;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:6px;text-align:center;" />
-          <span style="font-size:12px;color:#bbb;">%</span>
-          <span style="font-size:11px;color:#888;">Max enemy stats as % of attacker (>100 = attack up)</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <label style="font-size:12px;color:#bbb;white-space:nowrap;">Refresh rate:</label>
-          <select id="tpda-mgr-poll-select"
-                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:6px;font-size:12px;">
-            ${POLL_INTERVALS.map(p => `<option value="${p.ms}"${p.ms === STATE.pollMs ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
-          </select>
-        </div>
+        </div>`}
       </div>`;
   }
 
@@ -659,16 +631,26 @@
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
           <button id="tpda-mgr-scan" style="background:${STATE.scanning ? '#d64545' : '#e67e22'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
-            ${STATE.scanning ? 'Stop Scan' : 'Scan All Stats'}
+            ${STATE.scanning ? 'Stop Scan' : 'Scan Stats'}
           </button>
           <button id="tpda-mgr-refresh" style="background:#2a6df4;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
             Refresh Data
           </button>
+          <button id="tpda-mgr-refresh-stats" style="background:#6c3483;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">
+            Refresh Stats
+          </button>
           <span style="font-size:11px;color:#bbb;">
             ${STATE.scanning
-              ? `Scanning... ${STATE.scanProgress}/${STATE.scanTotal}`
-              : `${Object.keys(STATE.profileCache).length} profiles cached`}
+              ? 'Scanning... ' + STATE.scanProgress + '/' + STATE.scanTotal
+              : Object.keys(STATE.profileCache).length + ' profiles cached'}
           </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <label style="font-size:11px;color:#bbb;cursor:pointer;user-select:none;">
+            <input id="tpda-mgr-scan-online" type="checkbox"${STATE.scanOnlineOnly ? ' checked' : ''} style="margin-right:4px;" />
+            Scan online enemies only
+          </label>
+          <span style="font-size:10px;color:#666;">(saves API calls)</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid #2f3340;border-radius:8px;background:#0f1116;">
           <span style="font-size:11px;color:#bbb;">API:</span>
@@ -676,36 +658,48 @@
           <span style="font-size:11px;color:#888;">(limit 100)</span>
           <span style="font-size:11px;color:#666;">|</span>
           <span style="font-size:11px;color:#bbb;">${callsTotal} total this session</span>
-          ${rateWarning ? `<span style="font-size:11px;color:#f44;font-weight:bold;">${rateWarning}</span>` : ''}
+          ${rateWarning ? '<span style="font-size:11px;color:#f44;font-weight:bold;">' + rateWarning + '</span>' : ''}
         </div>
       </div>`;
   }
 
   function renderMemberSelector(ownOnline) {
+    const c = STATE.ownMembersCollapsed;
+    const arrow = c ? '\u25B6' : '\u25BC';
     const selected = STATE.selectedMemberId;
     const enriched = enrichWithStats(ownOnline);
+    const summary = ' <span style="color:#888;font-size:11px;">(' + ownOnline.length + ' online in Torn)</span>';
+
+    let memberButtons = '';
+    if (!c) {
+      memberButtons = enriched.map(m => {
+        const est = m.estimate;
+        const isActive = m.id === selected;
+        const bg = isActive ? '#e67e22' : '#2f3340';
+        const col = isActive ? '#fff' : '#ccc';
+        const badge = est ? ` [${escapeHtml(est.label)}]` : '';
+        return `<button class="tpda-mgr-pick-member" data-mid="${escapeHtml(m.id)}"
+          style="background:${bg};color:${col};border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap;">
+          ${escapeHtml(m.name)}${badge}
+        </button>`;
+      }).join('');
+      if (!ownOnline.length) memberButtons = '<span class="mgr-muted">No online members yet. Refresh data first.</span>';
+    }
+
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-weight:bold;">Pick Attacker (${ownOnline.length} online)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div id="tpda-mgr-own-toggle" style="font-weight:bold;cursor:pointer;user-select:none;">
+            ${arrow} Pick Attacker${summary}
+          </div>
           <button class="tpda-mgr-report-refresh"
                   style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
         </div>
-        <div style="font-size:11px;color:#888;margin-bottom:6px;">Select a faction member to build their personal target list</div>
+        ${c ? '' : `
+        <div style="font-size:11px;color:#888;margin:6px 0;">Select a faction member to build their personal target list</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:110px;overflow-y:auto;">
-          ${enriched.map(m => {
-            const est = m.estimate;
-            const isActive = m.id === selected;
-            const bg = isActive ? '#e67e22' : '#2f3340';
-            const col = isActive ? '#fff' : '#ccc';
-            const badge = est ? ` [${escapeHtml(est.label)}]` : '';
-            return `<button class="tpda-mgr-pick-member" data-mid="${escapeHtml(m.id)}"
-              style="background:${bg};color:${col};border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap;">
-              ${escapeHtml(m.name)}${badge}
-            </button>`;
-          }).join('')}
-          ${!ownOnline.length ? '<span class="mgr-muted">No online members yet. Refresh data first.</span>' : ''}
-        </div>
+          ${memberButtons}
+        </div>`}
       </div>`;
   }
 
@@ -723,7 +717,7 @@
           <div style="font-weight:bold;color:#e67e22;">
             Targets for ${escapeHtml(own.name)}
             ${ownEnriched.estimate ? ` <span style="color:${ownEnriched.estimate.color};">[${escapeHtml(ownEnriched.estimate.label)}]</span>` : ''}
-            <span style="color:#888;font-weight:normal;font-size:11px;"> @ ${STATE.thresholdPct}%</span>
+            <span style="color:#888;font-weight:normal;font-size:11px;"> (${targets.length} targets)</span>
           </div>
           <div style="display:flex;gap:6px;">
             <button class="tpda-mgr-copy-btn" data-copy-id="${listCopyId}"
@@ -766,7 +760,7 @@
               </div>
             </div>`;
         }).join('')}
-        <div style="font-size:11px;color:#888;margin-top:6px;">${targets.length} target${targets.length !== 1 ? 's' : ''} within ${STATE.thresholdPct}% of estimated stats</div>
+        <div style="font-size:11px;color:#888;margin-top:6px;">${targets.length} target${targets.length !== 1 ? 's' : ''} with estimated stats at or below yours</div>
       </div>`;
   }
 
@@ -966,15 +960,29 @@
       </div>`;
   }
 
-  function renderFactionList(title, list, cls) {
+  function renderFactionList(title, list, cls, collapsedKey) {
+    const c = collapsedKey ? STATE[collapsedKey] : false;
+    const arrow = c ? '\u25B6' : '\u25BC';
+    const toggleId = collapsedKey ? 'tpda-mgr-' + collapsedKey + '-toggle' : '';
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="font-weight:bold;margin-bottom:6px;">${escapeHtml(title)} (${list.length})</div>
-        ${renderMemberRows(list, cls)}
+        <div ${toggleId ? `id="${toggleId}"` : ''} style="font-weight:bold;${collapsedKey ? 'cursor:pointer;user-select:none;' : 'margin-bottom:6px;'}">
+          ${collapsedKey ? arrow + ' ' : ''}${escapeHtml(title)} (${list.length})
+        </div>
+        ${c ? '' : renderMemberRows(list, cls)}
       </div>`;
   }
 
   function attachPanelHandlers() {
+    // Faction ID card: toggle + save
+    const fidToggle = document.getElementById('tpda-mgr-fid-toggle');
+    if (fidToggle) {
+      fidToggle.onclick = () => {
+        STATE.factionIdCollapsed = !STATE.factionIdCollapsed;
+        renderPanel();
+      };
+    }
+
     const saveIdBtn = document.getElementById('tpda-mgr-save-id');
     if (saveIdBtn) {
       saveIdBtn.onclick = async () => {
@@ -987,24 +995,40 @@
       };
     }
 
-    const thresholdInput = document.getElementById('tpda-mgr-threshold');
-    if (thresholdInput) {
-      thresholdInput.onchange = () => {
-        const val = Math.max(10, Math.min(200, Number(thresholdInput.value) || DEFAULT_THRESHOLD_PCT));
-        STATE.thresholdPct = val;
-        saveThresholdPct(val);
-        computeAssignments();
+    // Own members toggle
+    const ownToggle = document.getElementById('tpda-mgr-own-toggle');
+    if (ownToggle) {
+      ownToggle.onclick = () => {
+        STATE.ownMembersCollapsed = !STATE.ownMembersCollapsed;
         renderPanel();
       };
     }
 
-    const pollSelect = document.getElementById('tpda-mgr-poll-select');
-    if (pollSelect) {
-      pollSelect.onchange = () => {
-        const ms = Number(pollSelect.value);
-        STATE.pollMs = ms;
-        savePollMs(ms);
-        restartPolling();
+    // Enemy available targets toggle
+    const enemyToggle = document.getElementById('tpda-mgr-enemyAvailableCollapsed-toggle');
+    if (enemyToggle) {
+      enemyToggle.onclick = () => {
+        STATE.enemyAvailableCollapsed = !STATE.enemyAvailableCollapsed;
+        renderPanel();
+      };
+    }
+
+    // Scan toggle: online-only vs all
+    const scanOnlineCb = document.getElementById('tpda-mgr-scan-online');
+    if (scanOnlineCb) {
+      scanOnlineCb.onchange = () => {
+        STATE.scanOnlineOnly = scanOnlineCb.checked;
+        addLog('Scan mode: ' + (STATE.scanOnlineOnly ? 'online enemies only' : 'all enemies'));
+      };
+    }
+
+    // Refresh Stats button: clears cache + rescans
+    const refreshStatsBtn = document.getElementById('tpda-mgr-refresh-stats');
+    if (refreshStatsBtn) {
+      refreshStatsBtn.onclick = () => {
+        clearProfileCache();
+        addLog('Profile cache cleared, starting fresh scan...');
+        scanAllStats();
       };
     }
 
