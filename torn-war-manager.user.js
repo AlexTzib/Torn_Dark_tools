@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      2.1.0
-// @description  War manager — scans both factions, estimates stats, online enemy report with live hospital timers, battle stat caching, attack links, copy-paste messages
+// @version      2.2.0
+// @description  War manager — scans both factions, estimates stats via FFScouter or rank-based, online enemy report with live hospital timers, battle stat caching, attack links, copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
@@ -51,6 +51,9 @@
     selectedEnemy: null,   // { id, name } — selected enemy member for attack suggestion
     hospitalTickerId: null,
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
+    ffScouterCache: {},    // id -> { playerId, bsEstimate, bsEstimateHuman, fairFight, lastUpdated, cachedAt }
+    statSource: 'ffscouter', // 'ffscouter' or 'rank' — which stat source to prefer
+    ffScouterKeyCollapsed: true,
     _copyTexts: {},        // numeric id → copy text string (avoids putting long text in data attributes)
     scanning: false,
     scanProgress: 0,
@@ -755,6 +758,157 @@
     }
   }
 
+  /* ── FFScouter integration ───────────────────────────────────
+   *  Calls ffscouter.com/api/v1/get-stats to get battle stat
+   *  estimates based on Fair Fight analysis (community data).
+   *  Much more accurate than rank-based estimation.
+   *
+   *  Requires a separate FFScouter API key (user registers at
+   *  ffscouter.com with their Torn API key).
+   *
+   *  API: GET /api/v1/get-stats?key={ffkey}&targets={id1,id2,...}
+   *  - Up to 205 targets per request
+   *  - Rate limit: 20 requests/min per IP
+   *  - Returns: [{ player_id, fair_fight, bs_estimate,
+   *               bs_estimate_human, last_updated }]
+   *  ──────────────────────────────────────────────────────────── */
+
+  const FFSCOUTER_BASE_URL = 'https://ffscouter.com/api/v1';
+  const FFSCOUTER_CACHE_KEY = 'tpda_shared_ffscouter_cache';
+  const FFSCOUTER_KEY_STORAGE = 'tpda_shared_ffscouter_api_key';
+  const FFSCOUTER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+  const FFSCOUTER_CHUNK_SIZE = 200; // API max is 205, use 200 for safety
+
+  function getFFScouterKey() {
+    return getStorage(FFSCOUTER_KEY_STORAGE, '');
+  }
+
+  function setFFScouterKey(key) {
+    setStorage(FFSCOUTER_KEY_STORAGE, String(key || '').trim());
+  }
+
+  function loadFFScouterCache() {
+    const raw = getStorage(FFSCOUTER_CACHE_KEY, {});
+    const now = nowTs();
+    const pruned = {};
+    for (const [id, entry] of Object.entries(raw)) {
+      if (entry && (now - (entry.cachedAt || 0)) < FFSCOUTER_CACHE_TTL) {
+        pruned[id] = entry;
+      }
+    }
+    return pruned;
+  }
+
+  function saveFFScouterCache() {
+    if (!STATE.ffScouterCache) return;
+    setStorage(FFSCOUTER_CACHE_KEY, STATE.ffScouterCache);
+  }
+
+  function clearFFScouterCache() {
+    STATE.ffScouterCache = {};
+    setStorage(FFSCOUTER_CACHE_KEY, {});
+    addLog('FFScouter cache cleared');
+  }
+
+  /** Fetch FFScouter stats for a list of player IDs.
+   *  Chunks into groups of 200, returns total fetched count.
+   *  Results stored in STATE.ffScouterCache. */
+  async function fetchFFScouterStats(playerIds) {
+    const ffKey = getFFScouterKey();
+    if (!ffKey) {
+      addLog('FFScouter: no API key configured');
+      return 0;
+    }
+    if (!playerIds || !playerIds.length) return 0;
+
+    if (!STATE.ffScouterCache) STATE.ffScouterCache = {};
+
+    // Filter to only stale/missing IDs
+    const now = nowTs();
+    const staleIds = playerIds.filter(id => {
+      const entry = STATE.ffScouterCache[id];
+      return !entry || (now - (entry.cachedAt || 0)) >= FFSCOUTER_CACHE_TTL;
+    });
+
+    if (!staleIds.length) {
+      addLog('FFScouter: all targets already cached');
+      return 0;
+    }
+
+    let totalFetched = 0;
+
+    for (let i = 0; i < staleIds.length; i += FFSCOUTER_CHUNK_SIZE) {
+      const chunk = staleIds.slice(i, i + FFSCOUTER_CHUNK_SIZE);
+      const targetsParam = chunk.join(',');
+      const url = `${FFSCOUTER_BASE_URL}/get-stats?key=${encodeURIComponent(ffKey)}&targets=${targetsParam}`;
+
+      try {
+        addLog(`FFScouter: fetching ${chunk.length} targets (chunk ${Math.floor(i / FFSCOUTER_CHUNK_SIZE) + 1})...`);
+        const data = await crossOriginGet(url);
+
+        if (Array.isArray(data)) {
+          const cacheTime = nowTs();
+          for (const stat of data) {
+            if (!stat.player_id) continue;
+            STATE.ffScouterCache[String(stat.player_id)] = {
+              playerId: stat.player_id,
+              bsEstimate: stat.bs_estimate || null,
+              bsEstimateHuman: stat.bs_estimate_human || null,
+              fairFight: stat.fair_fight || null,
+              lastUpdated: stat.last_updated || null,
+              cachedAt: cacheTime
+            };
+            if (stat.bs_estimate) totalFetched++;
+          }
+          addLog(`FFScouter: got ${chunk.length} results (${totalFetched} with data)`);
+        } else if (data && data.error) {
+          addLog(`FFScouter error: ${data.error} (code ${data.code || '?'})`);
+          if (data.code === 6) {
+            addLog('FFScouter: API key not registered. Register at ffscouter.com');
+            break;
+          }
+        }
+      } catch (err) {
+        addLog(`FFScouter fetch error: ${err.message || err}`);
+      }
+
+      // Rate limit courtesy: 3s delay between chunks
+      if (i + FFSCOUTER_CHUNK_SIZE < staleIds.length) {
+        await sleep(3000);
+      }
+    }
+
+    saveFFScouterCache();
+    return totalFetched;
+  }
+
+  /** Format FFScouter bs_estimate as a human-readable stat label.
+   *  Returns an object { label, color } matching the rank-based estimate format. */
+  function ffScouterToEstimate(entry) {
+    if (!entry || !entry.bsEstimate) return null;
+    const bs = entry.bsEstimate;
+    const human = entry.bsEstimateHuman || formatStatCompact(bs);
+    // Color based on absolute stat level
+    let color;
+    if (bs >= 2e9) color = '#ff1744';        // 2B+: deep red (extremely strong)
+    else if (bs >= 500e6) color = '#ff5252';  // 500M+: red
+    else if (bs >= 100e6) color = '#ff9800';  // 100M+: orange
+    else if (bs >= 50e6) color = '#ffc107';   // 50M+: amber
+    else if (bs >= 10e6) color = '#ffeb3b';   // 10M+: yellow
+    else if (bs >= 2e6) color = '#8bc34a';    // 2M+: light green
+    else color = '#4caf50';                   // under 2M: green (weak)
+
+    const ffLabel = entry.fairFight != null ? ` FF:${entry.fairFight.toFixed(2)}` : '';
+    return {
+      label: `~${human}${ffLabel}`,
+      color,
+      source: 'ffscouter',
+      bsEstimate: bs,
+      fairFight: entry.fairFight,
+      bsHuman: human
+    };
+  }
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   /* ── waitForElement: MutationObserver-based DOM polling ─────
@@ -1421,14 +1575,36 @@
   async function refreshAll() {
     await fetchOwnFactionMembers();
     await fetchEnemyFactionMembers();
+    // Auto-fetch FFScouter data if key is configured
+    await fetchFFScouterForAll();
     renderPanel();
   }
 
   /* ── Stat scanning ─────────────────────────────────────────── */
 
+  /** Fetch FFScouter stats for all loaded faction members */
+  async function fetchFFScouterForAll() {
+    const ffKey = getFFScouterKey();
+    if (!ffKey) return;
+    const allIds = [
+      ...STATE.ownMembers.map(m => m.id),
+      ...STATE.enemyMembers.map(m => m.id)
+    ].filter(Boolean);
+    if (!allIds.length) return;
+    await fetchFFScouterStats(allIds);
+  }
+
   async function scanAllStats() {
     if (STATE.scanning) { STATE.scanning = false; return; }
     if (!STATE.apiKey) { addLog('No API key for scan'); return; }
+
+    // FFScouter bulk fetch first (fast, 1 API call per 200 targets)
+    const ffKey = getFFScouterKey();
+    if (ffKey) {
+      addLog('FFScouter: bulk fetching all members...');
+      renderPanel();
+      await fetchFFScouterForAll();
+    }
 
     // Own members: always scan only online (no point scanning offline allies)
     // Enemies: scan online-only or all based on toggle
@@ -1485,7 +1661,26 @@
   function enrichWithStats(members) {
     return members.map(m => {
       const p = STATE.profileCache[m.id];
-      return { ...m, estimate: p?.estimate || null, midpoint: p ? rankToMidpoint(p.rank) : 0 };
+      const rankEstimate = p?.estimate || null;
+      const ffEntry = STATE.ffScouterCache ? STATE.ffScouterCache[m.id] : null;
+      const ffEstimate = ffScouterToEstimate(ffEntry);
+
+      let estimate;
+      if (STATE.statSource === 'ffscouter' && ffEstimate) {
+        estimate = ffEstimate;
+      } else if (STATE.statSource === 'ffscouter' && rankEstimate) {
+        // FFScouter preferred but no data — fall back to rank with a marker
+        estimate = { ...rankEstimate, source: 'rank-fallback' };
+      } else if (STATE.statSource === 'rank' && rankEstimate) {
+        estimate = { ...rankEstimate, source: 'rank' };
+      } else if (ffEstimate) {
+        estimate = ffEstimate;
+      } else {
+        estimate = rankEstimate ? { ...rankEstimate, source: 'rank' } : null;
+      }
+
+      const midpoint = ffEstimate?.bsEstimate || (p ? rankToMidpoint(p.rank) : 0);
+      return { ...m, estimate, midpoint };
     });
   }
 
@@ -1805,6 +2000,7 @@
       ${renderWarStatusCard(ownOnline, ownHospital, enemyOnline, enemyHospital)}
       ${renderApiKeyCard()}
       ${renderFactionIdCard()}
+      ${renderFFScouterCard()}
       ${renderActionBar()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
       ${renderAttackSuggestion()}
@@ -1847,6 +2043,59 @@
           <input id="tpda-mgr-faction-input" type="text" value="${escapeHtml(getManualEnemyFactionId())}" placeholder="Enemy faction ID"
                  style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;" />
           <button id="tpda-mgr-save-id" style="background:#444;color:white;border:none;border-radius:8px;padding:8px 10px;">Save</button>
+        </div>`}
+      </div>`;
+  }
+
+  function renderFFScouterCard() {
+    const c = STATE.ffScouterKeyCollapsed;
+    const arrow = c ? '\u25B6' : '\u25BC';
+    const ffKey = getFFScouterKey();
+    const hasKey = ffKey.length >= 16;
+    const keyPreview = hasKey ? ffKey.substring(0, 4) + '...' : 'Not set';
+    const ffCacheCount = STATE.ffScouterCache ? Object.keys(STATE.ffScouterCache).length : 0;
+    const srcLabel = STATE.statSource === 'ffscouter' ? 'FFScouter' : 'Rank-based';
+    const srcColor = STATE.statSource === 'ffscouter' ? '#4caf50' : '#ffc107';
+    const summary = ` <span style="color:#888;font-size:11px;">(${escapeHtml(srcLabel)}, key: ${escapeHtml(keyPreview)})</span>`;
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#141821;">
+        <div id="tpda-mgr-ffs-toggle" style="font-weight:bold;cursor:pointer;user-select:none;">
+          ${arrow} Stat Source${c ? summary : ''}
+        </div>
+        ${c ? '' : `
+        <div style="margin-top:8px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <label style="font-size:12px;color:#bbb;">Source:</label>
+            <select id="tpda-mgr-stat-source"
+                    style="background:#0f1116;color:#fff;border:1px solid #444;border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="ffscouter"${STATE.statSource === 'ffscouter' ? ' selected' : ''}>FFScouter (recommended)</option>
+              <option value="rank"${STATE.statSource === 'rank' ? ' selected' : ''}>Rank-based estimate</option>
+            </select>
+            <span style="font-size:10px;color:${srcColor};">\u25CF ${escapeHtml(srcLabel)}</span>
+          </div>
+          <div style="font-size:11px;color:#888;margin-bottom:8px;">
+            ${STATE.statSource === 'ffscouter'
+              ? 'FFScouter uses Fair Fight data from community attacks for accurate battle stat estimates. Falls back to rank-based if no FFScouter data available.'
+              : 'Rank-based estimates stats from player rank, level, crimes and networth. Less accurate than FFScouter.'}
+          </div>
+          <div style="border-top:1px solid #2f3340;padding-top:8px;margin-top:4px;">
+            <div style="font-size:12px;color:#bbb;margin-bottom:4px;">FFScouter API Key</div>
+            <div style="font-size:11px;color:#888;margin-bottom:6px;">
+              Register at <span style="color:#42a5f5;">ffscouter.com</span> with your Torn API key to get an FFScouter key.
+              ${hasKey ? `<span style="color:#4caf50;">\u2714 Key configured</span> (${ffCacheCount} cached)` : '<span style="color:#ff8a8a;">\u2716 No key set</span>'}
+            </div>
+            <div style="display:flex;gap:8px;">
+              <input id="tpda-mgr-ffs-key-input" type="text" value="${escapeHtml(ffKey)}" placeholder="FFScouter API key (16 chars)"
+                     style="flex:1;background:#0f1116;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;font-size:12px;" />
+              <button id="tpda-mgr-ffs-save" style="background:#4caf50;color:white;border:none;border-radius:8px;padding:8px 10px;font-size:12px;cursor:pointer;">Save</button>
+            </div>
+            ${hasKey ? `
+            <div style="display:flex;gap:8px;margin-top:6px;">
+              <button id="tpda-mgr-ffs-fetch" style="background:#2a6df4;color:white;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Fetch FFScouter Now</button>
+              <button id="tpda-mgr-ffs-clear" style="background:#444;color:white;border:none;border-radius:8px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear Cache</button>
+            </div>` : ''}
+          </div>
         </div>`}
       </div>`;
   }
@@ -1984,11 +2233,15 @@
     ];
   }
 
+  function buildStatBadge(est) {
+    if (!est) return ' <span style="color:#555;font-size:10px;">[not scanned]</span>';
+    const srcIcon = est.source === 'ffscouter' ? '\uD83C\uDFAF' : est.source === 'rank-fallback' ? '\u2248' : '';
+    return ` <span style="color:${est.color};font-weight:bold;">${srcIcon}[${escapeHtml(est.label)}]</span>`;
+  }
+
   function renderReportRow(e) {
     const est = e.estimate;
-    const statBadge = est
-      ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>`
-      : ' <span style="color:#555;font-size:10px;">[not scanned]</span>';
+    const statBadge = buildStatBadge(est);
     let timerNote = '';
     if (e.remainingSec != null && e.timerUntilUnix) {
       const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
@@ -2049,9 +2302,7 @@
 
   function renderOwnMemberRow(e) {
     const est = e.estimate;
-    const statBadge = est
-      ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>`
-      : ' <span style="color:#555;font-size:10px;">[not scanned]</span>';
+    const statBadge = buildStatBadge(est);
     let timerNote = '';
     if (e.remainingSec != null && e.timerUntilUnix) {
       const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
@@ -2128,11 +2379,14 @@
       rows += renderOwnReportSection(s);
     }
 
-    const scanHint = scannedCount === 0
+    const ownFfHits = all.filter(m => STATE.ffScouterCache && STATE.ffScouterCache[m.id]?.bsEstimate).length;
+    const ownSrcInfo = STATE.statSource === 'ffscouter' && ownFfHits > 0
+      ? `<span style="font-size:10px;color:#4caf50;">\uD83C\uDFAF ${ownFfHits} FFScouter</span>`
+      : '';
+
+    const scanHint = scannedCount === 0 && ownFfHits === 0
       ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan Stats" to see battle stat estimates</div>`
-      : scannedCount < all.length
-        ? `<div style="font-size:10px;color:#888;margin-top:4px;">${scannedCount}/${all.length} scanned</div>`
-        : '';
+      : `<div style="font-size:10px;color:#888;margin-top:4px;">${ownSrcInfo}${scannedCount > 0 ? (ownSrcInfo ? ' | ' : '') + scannedCount + '/' + all.length + ' rank-scanned' : ''}</div>`;
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #42a5f5;border-radius:10px;background:#111822;">
@@ -2216,11 +2470,14 @@
       rows += renderReportSection(s);
     }
 
-    const scanHint = scannedCount === 0
+    const ffCacheHits = all.filter(m => STATE.ffScouterCache && STATE.ffScouterCache[m.id]?.bsEstimate).length;
+    const srcInfo = STATE.statSource === 'ffscouter' && ffCacheHits > 0
+      ? `<span style="font-size:10px;color:#4caf50;">\uD83C\uDFAF ${ffCacheHits} FFScouter</span>`
+      : '';
+
+    const scanHint = scannedCount === 0 && ffCacheHits === 0
       ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan Stats" to see battle stat estimates</div>`
-      : scannedCount < all.length
-        ? `<div style="font-size:10px;color:#888;margin-top:4px;">${scannedCount}/${all.length} scanned</div>`
-        : '';
+      : `<div style="font-size:10px;color:#888;margin-top:4px;">${srcInfo}${scannedCount > 0 ? (srcInfo ? ' | ' : '') + scannedCount + '/' + all.length + ' rank-scanned' : ''}</div>`;
 
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
@@ -2281,8 +2538,60 @@
     if (refreshStatsBtn) {
       refreshStatsBtn.onclick = () => {
         clearProfileCache();
-        addLog('Profile cache cleared, starting fresh scan...');
+        clearFFScouterCache();
+        addLog('All stat caches cleared, starting fresh scan...');
         scanAllStats();
+      };
+    }
+
+    // FFScouter card handlers
+    const ffsToggle = document.getElementById('tpda-mgr-ffs-toggle');
+    if (ffsToggle) {
+      ffsToggle.onclick = () => {
+        STATE.ffScouterKeyCollapsed = !STATE.ffScouterKeyCollapsed;
+        renderPanel();
+      };
+    }
+
+    const statSourceSelect = document.getElementById('tpda-mgr-stat-source');
+    if (statSourceSelect) {
+      statSourceSelect.onchange = () => {
+        STATE.statSource = statSourceSelect.value;
+        setStorage(SCRIPT_KEY + '_stat_source', STATE.statSource);
+        addLog('Stat source changed to: ' + STATE.statSource);
+        renderPanel();
+      };
+    }
+
+    const ffsSaveBtn = document.getElementById('tpda-mgr-ffs-save');
+    if (ffsSaveBtn) {
+      ffsSaveBtn.onclick = async () => {
+        const input = document.getElementById('tpda-mgr-ffs-key-input');
+        const val = String(input?.value || '').trim();
+        setFFScouterKey(val);
+        addLog('FFScouter API key ' + (val ? 'saved' : 'cleared'));
+        if (val && val.length >= 16) {
+          await fetchFFScouterForAll();
+        }
+        renderPanel();
+      };
+    }
+
+    const ffsFetchBtn = document.getElementById('tpda-mgr-ffs-fetch');
+    if (ffsFetchBtn) {
+      ffsFetchBtn.onclick = async () => {
+        ffsFetchBtn.textContent = 'Fetching...';
+        ffsFetchBtn.disabled = true;
+        await fetchFFScouterForAll();
+        renderPanel();
+      };
+    }
+
+    const ffsClearBtn = document.getElementById('tpda-mgr-ffs-clear');
+    if (ffsClearBtn) {
+      ffsClearBtn.onclick = () => {
+        clearFFScouterCache();
+        renderPanel();
       };
     }
 
@@ -2319,6 +2628,8 @@
   async function init() {
     initApiKey(PDA_INJECTED_KEY);
     STATE.profileCache = loadProfileCache();
+    STATE.ffScouterCache = loadFFScouterCache();
+    STATE.statSource = getStorage(SCRIPT_KEY + '_stat_source', 'ffscouter');
     STATE.pollMs = loadPollMs(POLL_INTERVALS, DEFAULT_POLL_MS);
 
     ensureStyles();
@@ -2327,7 +2638,8 @@
     await detectEnemyFaction();
     window.addEventListener('resize', onResize);
     startPolling();
-    addLog('War Manager initialized' + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
+    const ffKeyStatus = getFFScouterKey() ? 'FFScouter key loaded' : 'no FFScouter key';
+    addLog(`War Manager initialized (${ffKeyStatus})` + (STATE.apiKey ? '' : ' \u2014 waiting for API key'));
     if (STATE.enemyFactionId && STATE.apiKey) {
       await refreshAll();
     }

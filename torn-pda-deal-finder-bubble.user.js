@@ -745,6 +745,157 @@
     }
   }
 
+  /* ── FFScouter integration ───────────────────────────────────
+   *  Calls ffscouter.com/api/v1/get-stats to get battle stat
+   *  estimates based on Fair Fight analysis (community data).
+   *  Much more accurate than rank-based estimation.
+   *
+   *  Requires a separate FFScouter API key (user registers at
+   *  ffscouter.com with their Torn API key).
+   *
+   *  API: GET /api/v1/get-stats?key={ffkey}&targets={id1,id2,...}
+   *  - Up to 205 targets per request
+   *  - Rate limit: 20 requests/min per IP
+   *  - Returns: [{ player_id, fair_fight, bs_estimate,
+   *               bs_estimate_human, last_updated }]
+   *  ──────────────────────────────────────────────────────────── */
+
+  const FFSCOUTER_BASE_URL = 'https://ffscouter.com/api/v1';
+  const FFSCOUTER_CACHE_KEY = 'tpda_shared_ffscouter_cache';
+  const FFSCOUTER_KEY_STORAGE = 'tpda_shared_ffscouter_api_key';
+  const FFSCOUTER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+  const FFSCOUTER_CHUNK_SIZE = 200; // API max is 205, use 200 for safety
+
+  function getFFScouterKey() {
+    return getStorage(FFSCOUTER_KEY_STORAGE, '');
+  }
+
+  function setFFScouterKey(key) {
+    setStorage(FFSCOUTER_KEY_STORAGE, String(key || '').trim());
+  }
+
+  function loadFFScouterCache() {
+    const raw = getStorage(FFSCOUTER_CACHE_KEY, {});
+    const now = nowTs();
+    const pruned = {};
+    for (const [id, entry] of Object.entries(raw)) {
+      if (entry && (now - (entry.cachedAt || 0)) < FFSCOUTER_CACHE_TTL) {
+        pruned[id] = entry;
+      }
+    }
+    return pruned;
+  }
+
+  function saveFFScouterCache() {
+    if (!STATE.ffScouterCache) return;
+    setStorage(FFSCOUTER_CACHE_KEY, STATE.ffScouterCache);
+  }
+
+  function clearFFScouterCache() {
+    STATE.ffScouterCache = {};
+    setStorage(FFSCOUTER_CACHE_KEY, {});
+    addLog('FFScouter cache cleared');
+  }
+
+  /** Fetch FFScouter stats for a list of player IDs.
+   *  Chunks into groups of 200, returns total fetched count.
+   *  Results stored in STATE.ffScouterCache. */
+  async function fetchFFScouterStats(playerIds) {
+    const ffKey = getFFScouterKey();
+    if (!ffKey) {
+      addLog('FFScouter: no API key configured');
+      return 0;
+    }
+    if (!playerIds || !playerIds.length) return 0;
+
+    if (!STATE.ffScouterCache) STATE.ffScouterCache = {};
+
+    // Filter to only stale/missing IDs
+    const now = nowTs();
+    const staleIds = playerIds.filter(id => {
+      const entry = STATE.ffScouterCache[id];
+      return !entry || (now - (entry.cachedAt || 0)) >= FFSCOUTER_CACHE_TTL;
+    });
+
+    if (!staleIds.length) {
+      addLog('FFScouter: all targets already cached');
+      return 0;
+    }
+
+    let totalFetched = 0;
+
+    for (let i = 0; i < staleIds.length; i += FFSCOUTER_CHUNK_SIZE) {
+      const chunk = staleIds.slice(i, i + FFSCOUTER_CHUNK_SIZE);
+      const targetsParam = chunk.join(',');
+      const url = `${FFSCOUTER_BASE_URL}/get-stats?key=${encodeURIComponent(ffKey)}&targets=${targetsParam}`;
+
+      try {
+        addLog(`FFScouter: fetching ${chunk.length} targets (chunk ${Math.floor(i / FFSCOUTER_CHUNK_SIZE) + 1})...`);
+        const data = await crossOriginGet(url);
+
+        if (Array.isArray(data)) {
+          const cacheTime = nowTs();
+          for (const stat of data) {
+            if (!stat.player_id) continue;
+            STATE.ffScouterCache[String(stat.player_id)] = {
+              playerId: stat.player_id,
+              bsEstimate: stat.bs_estimate || null,
+              bsEstimateHuman: stat.bs_estimate_human || null,
+              fairFight: stat.fair_fight || null,
+              lastUpdated: stat.last_updated || null,
+              cachedAt: cacheTime
+            };
+            if (stat.bs_estimate) totalFetched++;
+          }
+          addLog(`FFScouter: got ${chunk.length} results (${totalFetched} with data)`);
+        } else if (data && data.error) {
+          addLog(`FFScouter error: ${data.error} (code ${data.code || '?'})`);
+          if (data.code === 6) {
+            addLog('FFScouter: API key not registered. Register at ffscouter.com');
+            break;
+          }
+        }
+      } catch (err) {
+        addLog(`FFScouter fetch error: ${err.message || err}`);
+      }
+
+      // Rate limit courtesy: 3s delay between chunks
+      if (i + FFSCOUTER_CHUNK_SIZE < staleIds.length) {
+        await sleep(3000);
+      }
+    }
+
+    saveFFScouterCache();
+    return totalFetched;
+  }
+
+  /** Format FFScouter bs_estimate as a human-readable stat label.
+   *  Returns an object { label, color } matching the rank-based estimate format. */
+  function ffScouterToEstimate(entry) {
+    if (!entry || !entry.bsEstimate) return null;
+    const bs = entry.bsEstimate;
+    const human = entry.bsEstimateHuman || formatStatCompact(bs);
+    // Color based on absolute stat level
+    let color;
+    if (bs >= 2e9) color = '#ff1744';        // 2B+: deep red (extremely strong)
+    else if (bs >= 500e6) color = '#ff5252';  // 500M+: red
+    else if (bs >= 100e6) color = '#ff9800';  // 100M+: orange
+    else if (bs >= 50e6) color = '#ffc107';   // 50M+: amber
+    else if (bs >= 10e6) color = '#ffeb3b';   // 10M+: yellow
+    else if (bs >= 2e6) color = '#8bc34a';    // 2M+: light green
+    else color = '#4caf50';                   // under 2M: green (weak)
+
+    const ffLabel = entry.fairFight != null ? ` FF:${entry.fairFight.toFixed(2)}` : '';
+    return {
+      label: `~${human}${ffLabel}`,
+      color,
+      source: 'ffscouter',
+      bsEstimate: bs,
+      fairFight: entry.fairFight,
+      bsHuman: human
+    };
+  }
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   /* ── waitForElement: MutationObserver-based DOM polling ─────
