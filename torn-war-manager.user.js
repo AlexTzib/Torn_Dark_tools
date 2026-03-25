@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      1.8.0
-// @description  War target assignment manager — scans both factions, estimates stats, assigns targets by stat comparison, API call counter with rate limit protection, collapsible UI sections, online enemy report with attack links, generates copy-paste messages
+// @version      2.0.0
+// @description  War manager — scans both factions, estimates stats, online enemy report with live hospital timers, battle stat caching, attack links, copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
 // @grant        none
@@ -44,9 +44,8 @@
     lastError: '',
     pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
-    reportCollapsed: { inTorn: false, hospital: true, abroad: true, offlineRecent: true, offlineOld: true },
-    selectedMemberId: null, // currently selected own-faction member for target list
-    assignments: [],       // { own, enemy } pairs
+    reportCollapsed: { inTorn: false, hospital: false, abroad: true, jail: true, offlineRecent: true, offlineOld: true },
+    hospitalTickerId: null,
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
     _copyTexts: {},        // numeric id → copy text string (avoids putting long text in data attributes)
     scanning: false,
@@ -55,7 +54,6 @@
     scanOnlineOnly: true,  // default: scan only online members
     factionIdCollapsed: true,
     ownMembersCollapsed: true,
-    enemyAvailableCollapsed: true,
     ui: {
       minimized: true,
       zIndexBase: 999945
@@ -600,7 +598,7 @@
   }
 
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
-  const PROFILE_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours — use Refresh Stats to force re-scan
+  const PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours — use Refresh Stats to force re-scan
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
 
   /* ── API call tracking ────────────────────────────────────── */
@@ -1386,7 +1384,8 @@
           locationBucket: loc.bucket,
           locationLabel: loc.label,
           remainingSec: timer.remainingSec,
-          timerSource: timer.source
+          timerSource: timer.source,
+          timerUntilUnix: timer.remainingSec != null ? nowUnix() + timer.remainingSec : null
         };
       });
       STATE.lastFetchTs = nowTs();
@@ -1417,7 +1416,6 @@
   async function refreshAll() {
     await fetchOwnFactionMembers();
     await fetchEnemyFactionMembers();
-    computeAssignments();
     renderPanel();
   }
 
@@ -1444,7 +1442,6 @@
 
     if (!toScan.length) {
       addLog('All profiles already cached');
-      computeAssignments();
       renderPanel();
       return;
     }
@@ -1467,7 +1464,7 @@
         await sleep(gap);
       }
       if ((i + 1) % 5 === 0 || i === toScan.length - 1) {
-        computeAssignments();
+        saveProfileCache();
         renderPanel();
       }
     }
@@ -1475,11 +1472,10 @@
     STATE.scanning = false;
     saveProfileCache();
     addLog('Stat scan complete');
-    computeAssignments();
     renderPanel();
   }
 
-  /* ── Target assignment algorithm ───────────────────────────── */
+  /* ── Stat enrichment ─────────────────────────────────────── */
 
   function enrichWithStats(members) {
     return members.map(m => {
@@ -1502,135 +1498,52 @@
     });
   }
 
-  function getTargetsForMember(ownMember, enemies) {
-    return enemies.filter(e => e.estimate && e.midpoint <= ownMember.midpoint);
-  }
-
-  function computeAssignments() {
-    // Include all online own members in Torn; those without estimates get midpoint 0
-    const ownAvailable = enrichWithStats(
-      STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn')
-    ).sort((a, b) => b.midpoint - a.midpoint);
-
-    // Include all enemies not in jail; those without estimates still appear
-    const allEnemies = sortEnemiesByPriority(
-      enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
-    );
-
-    const assigned = new Set();
-    const assignments = [];
-
-    // First pass: match own members that HAVE estimates to enemies that HAVE estimates
-    for (const own of ownAvailable) {
-      if (!own.estimate) continue;
-      const best = allEnemies.find(e =>
-        !assigned.has(e.id) && e.estimate && e.midpoint <= own.midpoint
-      );
-      if (best) {
-        assigned.add(best.id);
-        assignments.push({ own, enemy: best });
-      }
-    }
-
-    // Second pass: own members without estimates get first unassigned enemy (any)
-    for (const own of ownAvailable) {
-      if (own.estimate) continue;
-      const first = allEnemies.find(e => !assigned.has(e.id));
-      if (first) {
-        assigned.add(first.id);
-        assignments.push({ own, enemy: first });
-      }
-    }
-
-    STATE.assignments = assignments;
-    const scannedOwn = ownAvailable.filter(m => m.estimate).length;
-    const scannedEnemy = allEnemies.filter(m => m.estimate).length;
-    addLog(`Assignments: ${assignments.length} pairs (${ownAvailable.length} online, ${scannedOwn} scanned | ${allEnemies.length} enemies, ${scannedEnemy} scanned)`);
-  }
-
-  function getSelectedMemberTargets() {
-    if (!STATE.selectedMemberId) return [];
-
-    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
-    if (!own) return [];
-    const ownEnriched = enrichWithStats([own])[0];
-
-    const enemies = sortEnemiesByPriority(
-      enrichWithStats(STATE.enemyMembers.filter(m => m.locationBucket !== 'jail'))
-    );
-
-    // If own member has no estimate, return all enemies sorted by priority
-    if (!ownEnriched.estimate) return enemies;
-
-    return getTargetsForMember(ownEnriched, enemies);
-  }
-
   /* ── Message generation ────────────────────────────────────── */
-  /* profileUrl/attackUrl use common.js versions */
-
-  function generateAssignmentMessages() {
-    if (!STATE.assignments.length) return 'No assignments yet. Scan stats first!';
-
-    return STATE.assignments.map(({ own, enemy }) => {
-      const ownName = own.name;
-      const enemyName = enemy.name;
-      const enemyProfile = profileUrl(enemy.id);
-      const enemyAttack = attackUrl(enemy.id);
-      const enemyEst = enemy.estimate ? ` [${enemy.estimate.label}]` : '';
-
-      let hospNote = '';
-      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
-        hospNote = ` (in hospital, out in ${formatSeconds(enemy.remainingSec)})`;
-      }
-
-      return `${ownName} -> ${enemyName}${enemyEst}${hospNote}\n  Profile: ${enemyProfile}\n  Attack: ${enemyAttack}`;
-    }).join('\n\n');
-  }
-
-  function generateCompactMessages() {
-    if (!STATE.assignments.length) return 'No assignments yet.';
-
-    return STATE.assignments.map(({ own, enemy }) => {
-      const est = enemy.estimate ? ` [${enemy.estimate.label}]` : '';
-      let hospNote = '';
-      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
-        hospNote = ` \u23F0 out in ${formatSeconds(enemy.remainingSec)}`;
-      }
-      return `${own.name} \u2192 ${enemy.name}${est}${hospNote} ${profileUrl(enemy.id)}`;
-    }).join('\n');
-  }
-
-  function generateSelectedTargetMessages() {
-    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
-    if (!own) return 'No member selected.';
-    const targets = getSelectedMemberTargets();
-    if (!targets.length) return 'No suitable targets found.';
-
-    return targets.map(e => {
-      const est = e.estimate ? ` [${e.estimate.label}]` : '';
-      let hospNote = '';
-      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
-        hospNote = ` (hospital, out in ${formatSeconds(e.remainingSec)})`;
-      }
-      return `${own.name} get ${e.name}${est}${hospNote}\n  ${profileUrl(e.id)}`;
-    }).join('\n\n');
-  }
 
   /* ── UI ─────────────────────────────────────────────────────── */
 
   function onPanelExpand() {
     if (!STATE.apiKey) return;
-    // Always refresh on open; detectEnemyFaction is cheap if already set
     if (!STATE.enemyFactionId) detectEnemyFaction();
     refreshAll();
+    startHospitalTicker();
   }
 
   function onPanelCollapse() {
-    // Cancel any running scan to save API calls while minimized
     if (STATE.scanning) {
       STATE.scanning = false;
       addLog('Scan cancelled (panel closed)');
     }
+    stopHospitalTicker();
+  }
+
+  function startHospitalTicker() {
+    stopHospitalTicker();
+    STATE.hospitalTickerId = setInterval(tickHospitalTimers, 1000);
+  }
+
+  function stopHospitalTicker() {
+    if (STATE.hospitalTickerId) {
+      clearInterval(STATE.hospitalTickerId);
+      STATE.hospitalTickerId = null;
+    }
+  }
+
+  function tickHospitalTimers() {
+    const els = document.querySelectorAll('.tpda-mgr-timer');
+    if (!els.length) return;
+    const now = Math.floor(Date.now() / 1000);
+    els.forEach(el => {
+      const until = Number(el.dataset.until || 0);
+      if (until <= 0) return;
+      const remaining = Math.max(0, until - now);
+      if (remaining <= 0) {
+        el.textContent = 'OUT NOW!';
+        el.style.color = '#4caf50';
+      } else {
+        el.textContent = formatSeconds(remaining);
+      }
+    });
   }
 
   function ensureStyles() {
@@ -1753,13 +1666,13 @@
       // Collapse All / Expand All
       const collapseAll = e.target.closest('.tpda-mgr-collapse-all');
       if (collapseAll) {
-        for (const k of ['inTorn', 'hospital', 'abroad', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = true;
+        for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = true;
         renderPanel();
         return;
       }
       const expandAll = e.target.closest('.tpda-mgr-expand-all');
       if (expandAll) {
-        for (const k of ['inTorn', 'hospital', 'abroad', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = false;
+        for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = false;
         renderPanel();
         return;
       }
@@ -1810,7 +1723,6 @@
     const ownOnline = STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn');
     const enemyOnline = STATE.enemyMembers.filter(m => m.isOnline);
     const enemyHospital = STATE.enemyMembers.filter(m => m.locationBucket === 'hospital');
-    const enemyAvailable = STATE.enemyMembers.filter(m => m.locationBucket !== 'jail');
 
     body.innerHTML = `
       ${renderWarStatusCard(ownOnline, enemyOnline, enemyHospital)}
@@ -1818,15 +1730,11 @@
       ${renderFactionIdCard()}
       ${renderActionBar()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
-      ${renderMemberSelector(ownOnline)}
-      ${renderSelectedTargetList()}
       ${renderEnemyReport()}
-      ${renderAssignmentsCard()}
-      ${renderFactionList('Enemy \u2014 Available Targets', enemyAvailable, 'mgr-enemy', 'enemyAvailableCollapsed')}
       ${renderLogCard()}
     `;
 
-    attachPanelHandlers(ownOnline);
+    attachPanelHandlers();
   }
 
   function renderWarStatusCard(ownOnline, enemyOnline, enemyHospital) {
@@ -1906,137 +1814,14 @@
       </div>`;
   }
 
-  function renderMemberSelector(ownOnline) {
-    const c = STATE.ownMembersCollapsed;
-    const arrow = c ? '\u25B6' : '\u25BC';
-    const selected = STATE.selectedMemberId;
-    const enriched = enrichWithStats(ownOnline);
-    const summary = ' <span style="color:#888;font-size:11px;">(' + ownOnline.length + ' online in Torn)</span>';
-
-    let memberButtons = '';
-    if (!c) {
-      memberButtons = enriched.map(m => {
-        const est = m.estimate;
-        const isActive = m.id === selected;
-        const bg = isActive ? '#e67e22' : '#2f3340';
-        const col = isActive ? '#fff' : '#ccc';
-        const badge = est ? ` [${escapeHtml(est.label)}]` : '';
-        return `<button class="tpda-mgr-pick-member" data-mid="${escapeHtml(m.id)}"
-          style="background:${bg};color:${col};border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap;">
-          ${escapeHtml(m.name)}${badge}
-        </button>`;
-      }).join('');
-      if (!ownOnline.length) memberButtons = '<span class="mgr-muted">No online members yet. Refresh data first.</span>';
-    }
-
-    return `
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div id="tpda-mgr-own-toggle" style="font-weight:bold;cursor:pointer;user-select:none;">
-            ${arrow} Pick Attacker${summary}
-          </div>
-          <button class="tpda-mgr-report-refresh"
-                  style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">\u21BB</button>
-        </div>
-        ${c ? '' : `
-        <div style="font-size:11px;color:#888;margin:6px 0;">Select a faction member to build their personal target list</div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:110px;overflow-y:auto;">
-          ${memberButtons}
-        </div>`}
-      </div>`;
-  }
-
-  function renderSelectedTargetList() {
-    if (!STATE.selectedMemberId) return '';
-    const own = STATE.ownMembers.find(m => m.id === STATE.selectedMemberId);
-    if (!own) return '';
-    const ownEnriched = enrichWithStats([own])[0];
-    const targets = getSelectedMemberTargets();
-    const listCopyId = registerCopyText(generateSelectedTargetMessages());
-
-    return `
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #e67e22;border-radius:10px;background:#1f1a12;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-weight:bold;color:#e67e22;">
-            Targets for ${escapeHtml(own.name)}
-            ${ownEnriched.estimate ? ` <span style="color:${ownEnriched.estimate.color};">[${escapeHtml(ownEnriched.estimate.label)}]</span>` : ''}
-            <span style="color:#888;font-weight:normal;font-size:11px;"> (${targets.length} targets)</span>
-          </div>
-          <div style="display:flex;gap:6px;">
-            <button class="tpda-mgr-copy-btn" data-copy-id="${listCopyId}"
-                    style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Copy List
-            </button>
-            <button id="tpda-mgr-deselect"
-                    style="font-size:11px;background:#444;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Clear
-            </button>
-          </div>
-        </div>
-        ${!targets.length ? '<div class="mgr-muted">No suitable targets at current threshold. Try increasing the stat % or scan more stats.</div>' : ''}
-        ${targets.map(e => {
-          const est = e.estimate;
-          const enemyStatus = e.isOnline
-            ? '<span style="color:#4caf50;">Online</span>'
-            : `<span style="color:#888;">${escapeHtml(e.relative)}</span>`;
-          let hospNote = '';
-          if (e.locationBucket === 'hospital' && e.remainingSec != null) {
-            hospNote = `<div style="font-size:11px;color:#ffd166;">\u23F0 Out of hospital in ${formatSeconds(e.remainingSec)}</div>`;
-          }
-          const tgtCopyId = registerCopyText(`${own.name} get ${e.name} ${est ? '[' + est.label + ']' : ''} ${profileUrl(e.id)}${e.locationBucket === 'hospital' && e.remainingSec != null ? ' (hospital, out in ' + formatSeconds(e.remainingSec) + ')' : ''}`);
-          return `
-            <div style="padding:6px 0;border-top:1px solid #3a3020;">
-              <div>
-                <strong class="mgr-enemy">${escapeHtml(e.name)}</strong>
-                ${e.level ? ` Lv${escapeHtml(e.level)}` : ''}
-                ${est ? ` <span style="color:${est.color};font-weight:bold;font-size:11px;">[${escapeHtml(est.label)}]</span>` : ''}
-              </div>
-              <div style="font-size:11px;color:#bbb;">${enemyStatus} \u2022 ${escapeHtml(e.locationLabel)}</div>
-              ${hospNote}
-              <div style="margin-top:3px;display:flex;gap:6px;">
-                <a href="${escapeHtml(attackUrl(e.id))}" target="_blank" rel="noopener"
-                   style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Attack</a>
-                <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
-                   style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">Profile</a>
-                <button class="tpda-mgr-copy-btn" data-copy-id="${tgtCopyId}"
-                        style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">Copy</button>
-              </div>
-            </div>`;
-        }).join('')}
-        <div style="font-size:11px;color:#888;margin-top:6px;">${targets.length} target${targets.length !== 1 ? 's' : ''} with estimated stats at or below yours</div>
-      </div>`;
-  }
-
-  function renderAssignmentsCard() {
-    const compactId = registerCopyText(generateCompactMessages());
-    const detailedId = registerCopyText(generateAssignmentMessages());
-    return `
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div style="font-weight:bold;">\uD83C\uDFAF Target Assignments (${STATE.assignments.length})</div>
-          <div style="display:flex;gap:6px;">
-            <button class="tpda-mgr-copy-btn" data-copy-id="${compactId}"
-                    style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Copy Compact
-            </button>
-            <button class="tpda-mgr-copy-btn" data-copy-id="${detailedId}"
-                    style="font-size:11px;background:#2a6df4;color:#fff;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Copy Detailed
-            </button>
-          </div>
-        </div>
-        ${renderAssignments()}
-      </div>`;
-  }
-
   function generateSectionText(members) {
     const enriched = enrichWithStats(members);
     return enriched.map(e => {
       const est = e.estimate;
-      const tag = est ? ` [${est.label}]` : '';
+      const tag = est ? ` [${est.label}]` : ' [not scanned]';
       let status = '';
       if (e.locationBucket === 'hospital' && e.remainingSec != null) {
-        status = ` — Hospital ${formatSeconds(e.remainingSec)}`;
+        status = ` — Hospital, out in ${formatSeconds(e.remainingSec)}`;
       } else if ((e.locationBucket === 'traveling' || e.locationBucket === 'abroad') && e.remainingSec != null) {
         status = ` — ${e.locationLabel || 'Traveling'} lands ${formatSeconds(e.remainingSec)}`;
       } else if (e.locationBucket === 'jail' && e.remainingSec != null) {
@@ -2046,7 +1831,7 @@
       } else if (!e.isOnline) {
         status = ` — Offline ${e.relative || ''}`;
       } else {
-        status = ' — OK';
+        status = ` — ${e.isOnline ? 'Online' : 'Offline'} in Torn`;
       }
       return `${e.name}${tag} Lv${e.level || '?'}${status} — ${attackUrl(e.id)}`;
     }).join('\n');
@@ -2070,32 +1855,46 @@
   function buildReportSections(enriched) {
     return [
       {
-        key: 'inTorn', title: 'In Torn', color: '#4caf50', border: '#4caf50',
+        key: 'inTorn', title: 'Online in Torn', color: '#4caf50', border: '#4caf50',
         members: enriched.filter(e => e.isOnline && e.locationBucket === 'torn')
       },
       {
-        key: 'hospital', title: 'Hospital / Other', color: '#ffc107', border: '#ffc107',
-        members: enriched.filter(e => e.isOnline && e.locationBucket !== 'torn' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling')
+        key: 'hospital', title: 'In Hospital', color: '#ff6b6b', border: '#ff6b6b',
+        members: enriched.filter(e => e.locationBucket === 'hospital')
+          .sort((a, b) => (a.remainingSec || 99999) - (b.remainingSec || 99999))
       },
       {
         key: 'abroad', title: 'Abroad / Traveling', color: '#42a5f5', border: '#42a5f5',
-        members: enriched.filter(e => e.isOnline && (e.locationBucket === 'abroad' || e.locationBucket === 'traveling'))
+        members: enriched.filter(e => e.locationBucket === 'abroad' || e.locationBucket === 'traveling')
+      },
+      {
+        key: 'jail', title: 'In Jail', color: '#ff8a8a', border: '#555',
+        members: enriched.filter(e => e.locationBucket === 'jail')
       },
       {
         key: 'offlineRecent', title: 'Offline < 1 hour', color: '#aaa', border: '#555',
-        members: enriched.filter(e => !e.isOnline && e.minutes < 60)
+        members: enriched.filter(e => !e.isOnline && e.locationBucket !== 'hospital' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling' && e.locationBucket !== 'jail' && e.minutes < 60)
       },
       {
         key: 'offlineOld', title: 'Offline > 1 hour', color: '#666', border: '#333',
-        members: enriched.filter(e => !e.isOnline && e.minutes >= 60)
+        members: enriched.filter(e => !e.isOnline && e.locationBucket !== 'hospital' && e.locationBucket !== 'abroad' && e.locationBucket !== 'traveling' && e.locationBucket !== 'jail' && e.minutes >= 60)
       }
     ];
   }
 
   function renderReportRow(e) {
     const est = e.estimate;
+    const statBadge = est
+      ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>`
+      : ' <span style="color:#555;font-size:10px;">[not scanned]</span>';
     let timerNote = '';
-    if (e.remainingSec != null) {
+    if (e.remainingSec != null && e.timerUntilUnix) {
+      const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
+      const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
+      const col = timerColors[e.locationBucket] || '#aaa';
+      const icon = timerIcons[e.locationBucket] || '\u23F0';
+      timerNote = ` <span style="color:${col};font-size:11px;">${icon} <span class="tpda-mgr-timer" data-until="${e.timerUntilUnix}">${formatSeconds(e.remainingSec)}</span></span>`;
+    } else if (e.remainingSec != null) {
       const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
       const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
       const col = timerColors[e.locationBucket] || '#aaa';
@@ -2111,7 +1910,7 @@
           <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
           <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
           ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
-          ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
+          ${statBadge}
           <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
           ${timerNote}${offlineInfo}
         </div>
@@ -2164,6 +1963,7 @@
     const enriched = enrichWithStats(all).sort((a, b) => a.midpoint - b.midpoint);
     const sections = buildReportSections(enriched);
     const onlineCount = all.filter(m => m.isOnline).length;
+    const hospitalCount = all.filter(m => m.locationBucket === 'hospital').length;
     const scannedCount = all.filter(m => STATE.profileCache[m.id]?.estimate).length;
     const copyAllId = registerCopyText(generateFullReport());
 
@@ -2173,7 +1973,7 @@
     }
 
     const scanHint = scannedCount === 0
-      ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan All Stats" to see strength estimates</div>`
+      ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan Stats" to see battle stat estimates</div>`
       : scannedCount < all.length
         ? `<div style="font-size:10px;color:#888;margin-top:4px;">${scannedCount}/${all.length} scanned</div>`
         : '';
@@ -2181,7 +1981,7 @@
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #4caf50;border-radius:10px;background:#111a13;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
-          <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Report (${onlineCount} online / ${all.length} total)</div>
+          <div style="font-weight:bold;color:#4caf50;">\uD83D\uDFE2 Enemy Report (${onlineCount} online / ${hospitalCount} hosp / ${all.length} total)</div>
           <div style="display:flex;gap:4px;align-items:center;">
             <span style="font-size:10px;color:#888;">${escapeHtml(lastFetchLabel)}</span>
             <button class="tpda-mgr-report-refresh"
@@ -2197,27 +1997,13 @@
           <button class="tpda-mgr-collapse-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Collapse All</button>
         </div>
         ${scanHint}
-        <div style="max-height:350px;overflow-y:auto;">
+        <div style="max-height:450px;overflow-y:auto;">
           ${rows}
         </div>
       </div>`;
   }
 
-  function renderFactionList(title, list, cls, collapsedKey) {
-    const c = collapsedKey ? STATE[collapsedKey] : false;
-    const arrow = c ? '\u25B6' : '\u25BC';
-    const toggleId = collapsedKey ? 'tpda-mgr-' + collapsedKey + '-toggle' : '';
-    return `
-      <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
-        <div ${toggleId ? `id="${toggleId}"` : ''} style="font-weight:bold;${collapsedKey ? 'cursor:pointer;user-select:none;' : 'margin-bottom:6px;'}">
-          ${collapsedKey ? arrow + ' ' : ''}${escapeHtml(title)} (${list.length})
-        </div>
-        ${c ? '' : renderMemberRows(list, cls)}
-      </div>`;
-  }
-
   function attachPanelHandlers() {
-    // Faction ID card: toggle + save
     const fidToggle = document.getElementById('tpda-mgr-fid-toggle');
     if (fidToggle) {
       fidToggle.onclick = () => {
@@ -2238,25 +2024,6 @@
       };
     }
 
-    // Own members toggle
-    const ownToggle = document.getElementById('tpda-mgr-own-toggle');
-    if (ownToggle) {
-      ownToggle.onclick = () => {
-        STATE.ownMembersCollapsed = !STATE.ownMembersCollapsed;
-        renderPanel();
-      };
-    }
-
-    // Enemy available targets toggle
-    const enemyToggle = document.getElementById('tpda-mgr-enemyAvailableCollapsed-toggle');
-    if (enemyToggle) {
-      enemyToggle.onclick = () => {
-        STATE.enemyAvailableCollapsed = !STATE.enemyAvailableCollapsed;
-        renderPanel();
-      };
-    }
-
-    // Scan toggle: online-only vs all
     const scanOnlineCb = document.getElementById('tpda-mgr-scan-online');
     if (scanOnlineCb) {
       scanOnlineCb.onchange = () => {
@@ -2265,7 +2032,6 @@
       };
     }
 
-    // Refresh Stats button: clears cache + rescans
     const refreshStatsBtn = document.getElementById('tpda-mgr-refresh-stats');
     if (refreshStatsBtn) {
       refreshStatsBtn.onclick = () => {
@@ -2280,106 +2046,6 @@
 
     const refreshBtn = document.getElementById('tpda-mgr-refresh');
     if (refreshBtn) refreshBtn.onclick = () => refreshAll();
-
-    // Member picker buttons
-    document.querySelectorAll('.tpda-mgr-pick-member').forEach(btn => {
-      btn.onclick = () => {
-        const mid = btn.dataset.mid;
-        STATE.selectedMemberId = (STATE.selectedMemberId === mid) ? null : mid;
-        renderPanel();
-      };
-    });
-
-    const deselectBtn = document.getElementById('tpda-mgr-deselect');
-    if (deselectBtn) {
-      deselectBtn.onclick = () => {
-        STATE.selectedMemberId = null;
-        renderPanel();
-      };
-    }
-  }
-
-  function renderAssignments() {
-    if (!STATE.assignments.length) {
-      const hasOwn = STATE.ownMembers.length > 0;
-      const hasEnemy = STATE.enemyMembers.length > 0;
-      const scannedOwn = STATE.ownMembers.filter(m => STATE.profileCache[m.id]?.estimate).length;
-      const scannedEnemy = STATE.enemyMembers.filter(m => STATE.profileCache[m.id]?.estimate).length;
-      let hint = '';
-      if (!hasOwn || !hasEnemy) hint = 'Refresh data to load faction members.';
-      else if (!scannedOwn && !scannedEnemy) hint = 'Scan stats first to estimate battle stats and generate assignments.';
-      else hint = `Scanned ${scannedOwn}/${STATE.ownMembers.length} own + ${scannedEnemy}/${STATE.enemyMembers.length} enemies. Try increasing the stat threshold or scanning more.`;
-      return `<div class="mgr-muted">No assignments yet. ${hint}</div>`;
-    }
-
-    return STATE.assignments.map(({ own, enemy }) => {
-      const ownEst = own.estimate ? ` <span style="color:${own.estimate.color};font-size:11px;">[${escapeHtml(own.estimate.label)}]</span>` : '';
-      const enemyEst = enemy.estimate ? ` <span style="color:${enemy.estimate.color};font-size:11px;">[${escapeHtml(enemy.estimate.label)}]</span>` : '';
-
-      let hospNote = '';
-      if (enemy.locationBucket === 'hospital' && enemy.remainingSec != null) {
-        hospNote = `<div style="font-size:11px;color:#ffd166;">\u23F0 Out of hospital in ${formatSeconds(enemy.remainingSec)}</div>`;
-      }
-
-      const enemyStatus = enemy.isOnline
-        ? '<span style="color:#4caf50;">Online</span>'
-        : `<span style="color:#888;">Last action: ${escapeHtml(enemy.relative)}</span>`;
-
-      const rowCopyId = registerCopyText(`${own.name} \u2192 ${enemy.name} ${enemy.estimate ? '[' + enemy.estimate.label + ']' : ''} ${profileUrl(enemy.id)}${enemy.locationBucket === 'hospital' && enemy.remainingSec != null ? ' (hospital, out in ' + formatSeconds(enemy.remainingSec) + ')' : ''}`);
-
-      return `
-        <div class="mgr-assign">
-          <div>
-            <span class="mgr-own"><strong>${escapeHtml(own.name)}</strong></span>${ownEst}
-            <span style="color:#bbb;"> \u2192 </span>
-            <span class="mgr-enemy"><strong>${escapeHtml(enemy.name)}</strong></span>${enemyEst}
-          </div>
-          <div style="font-size:11px;color:#bbb;">
-            ${enemyStatus} \u2022 ${escapeHtml(enemy.locationLabel)}
-          </div>
-          ${hospNote}
-          <div style="margin-top:4px;display:flex;gap:6px;">
-            <a href="${escapeHtml(attackUrl(enemy.id))}" target="_blank" rel="noopener"
-               style="font-size:11px;background:#d64545;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">
-              Attack
-            </a>
-            <a href="${escapeHtml(profileUrl(enemy.id))}" target="_blank" rel="noopener"
-               style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;">
-              Profile
-            </a>
-            <button class="tpda-mgr-copy-btn" data-copy-id="${rowCopyId}"
-                    style="font-size:11px;background:#2f3340;color:#bbb;border:none;border-radius:6px;padding:3px 8px;cursor:pointer;">
-              Copy
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  function renderMemberRows(list, cls) {
-    if (!list.length) return '<div class="mgr-muted">None</div>';
-    const maxShow = 20;
-    const visible = list.slice(0, maxShow);
-    const hidden = list.length - visible.length;
-
-    return visible.map(m => {
-      const profile = STATE.profileCache[m.id];
-      const est = profile?.estimate;
-      let hospNote = '';
-      if (m.locationBucket === 'hospital' && m.remainingSec != null) {
-        hospNote = ` <span style="color:#ffd166;font-size:11px;">\u23F0 ${formatSeconds(m.remainingSec)}</span>`;
-      }
-      return `
-        <div style="padding:4px 0;border-top:1px solid #2a2d38;font-size:12px;">
-          <a href="${escapeHtml(profileUrl(m.id))}" target="_blank" rel="noopener" class="${cls}" style="color:inherit;text-decoration:underline;text-decoration-style:dotted;"><strong>${escapeHtml(m.name)}</strong></a>
-          ${m.level ? ` Lv${escapeHtml(m.level)}` : ''}
-          ${est ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>` : ''}
-          <span style="color:#888;">\u2022 ${m.isOnline ? 'Online' : escapeHtml(m.relative)} \u2022 ${escapeHtml(m.locationLabel)}</span>
-          ${hospNote}
-        </div>
-      `;
-    }).join('') + (hidden > 0 ? `<div class="mgr-muted">+ ${hidden} more</div>` : '');
   }
 
   /* ── Polling ────────────────────────────────────────────────── */

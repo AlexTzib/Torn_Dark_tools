@@ -535,7 +535,7 @@
   }
 
   const PROFILE_CACHE_KEY = 'tpda_shared_profile_cache';
-  const PROFILE_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours — use Refresh Stats to force re-scan
+  const PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours — use Refresh Stats to force re-scan
   const SCAN_API_GAP_MS   = 650; // ~92 calls/min, under 100 limit
 
   /* ── API call tracking ────────────────────────────────────── */

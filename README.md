@@ -67,15 +67,18 @@ A market profit finder that scans item market and bazaar prices for your watchli
 
 ### War Manager (Orange "MGR" bubble)
 
-A war target assignment manager that scans both your faction and the enemy faction, estimates battle stats, and helps assign targets.
+A war manager that scans both your faction and the enemy faction, estimates battle stats, and provides a comprehensive enemy report with live hospital timers.
 
 - **Dual-faction scanning** — fetches own and enemy faction member rosters
 - **Stat estimation** — scans member profiles, estimates total battle stats from rank, level, crimes, networth
-- **Target assignment** — matches your faction members to enemy targets based on a configurable stat threshold (default 120%)
-- **Member selector** — pick any own-faction member to see their recommended targets
-- **Online enemy report** — shows online enemies with attack links, profile links, copy name
-- **Copy-paste messages** — generates formatted assignment messages for faction chat
-- **Configurable polling** — 30s / 1min / 2min / 5min / 10min refresh rate
+- **Battle stat caching** — scanned stats persist for 24 hours in localStorage so members stay marked between sessions
+- **Online enemy report** — shows all enemies grouped by status: Online in Torn, In Hospital, Abroad/Traveling, In Jail, Offline
+- **Live hospital timers** — countdown timers that tick every second showing when hospitalized enemies will be released
+- **Hospital section** — dedicated section for ALL hospitalized enemies (online or offline) sorted by soonest release
+- **Battle stats on every row** — each member row shows their estimated stat range (or "not scanned" indicator)
+- **Attack & profile links** per member — one-click attack link, profile link
+- **Copy-paste reports** — copy individual sections or the full report for faction chat
+- **Configurable polling** — 1min / 2min / 5min / 10min refresh rate
 - **Auto enemy detection** — detects enemy faction from URL, page links, or API war data
 
 ### Traveler Utility (Blue airplane bubble)
@@ -224,6 +227,32 @@ All eight scripts share a common bubble/panel architecture:
 
 ### Multiple Scripts
 All eight scripts can run simultaneously. They use separate z-index bases and auto-stack their bubbles vertically to avoid overlap.
+
+---
+
+## Using the Bubbles on PC (Tampermonkey / Greasemonkey)
+
+When running in a desktop browser with Tampermonkey or Greasemonkey, the bubble UI works like this:
+
+### Bubble Controls
+- **Click** the bubble to open its panel
+- **Drag** the bubble to move it anywhere on screen — it remembers its position between page loads
+- Bubbles auto-stack vertically in the bottom-right corner so they don't overlap
+
+### Panel Controls
+- **Drag the header bar** (the dark bar at the top with the title) to reposition the panel
+- **Click the close button** (circle icon in the top-right of the header) to collapse back to the bubble
+- Panel position is saved between page loads
+
+### Keyboard Shortcuts
+- There are no keyboard shortcuts — all interaction is mouse-based (click and drag)
+
+### Tips for Desktop Use
+- **Multiple panels can be open at once** — each script has its own z-index, so panels stack on top of each other. Click a panel's header to bring it to the front.
+- **Resize-safe** — if you resize your browser window, bubbles and panels automatically clamp to stay within the visible area
+- **API key entry** — click the "API Key" section header in any panel to expand it, paste your Torn API key, and click Save. The key is shared across all scripts (saved once = works everywhere).
+- **Scrollable content** — if a panel has more content than fits on screen, the body area scrolls independently while the header stays fixed
+- **Copy buttons** — most sections have "Copy" buttons that copy formatted text to your clipboard for pasting into faction chat
 
 ---
 
