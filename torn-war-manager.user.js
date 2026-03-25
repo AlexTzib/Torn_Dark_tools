@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - War Manager
 // @namespace    alex.torn.pda.war.manager.bubble
-// @version      2.0.0
+// @version      2.1.0
 // @description  War manager — scans both factions, estimates stats, online enemy report with live hospital timers, battle stat caching, attack links, copy-paste messages
 // @author       Alex + ChatGPT
 // @match        https://www.torn.com/*
@@ -45,6 +45,10 @@
     pollMs: DEFAULT_POLL_MS, // updated in init() via loadPollMs()
     pollTimerId: null,
     reportCollapsed: { inTorn: false, hospital: false, abroad: true, jail: true, offlineRecent: true, offlineOld: true },
+    ownReportCollapsed: true,
+    ownSectionCollapsed: { inTorn: false, hospital: false, abroad: true, jail: true, offlineRecent: true, offlineOld: true },
+    selectedAlly: null,    // { id, name } — selected own member for attack suggestion
+    selectedEnemy: null,   // { id, name } — selected enemy member for attack suggestion
     hospitalTickerId: null,
     profileCache: {},      // id -> { rank, level, crimesTotal, networth, estimate, fetchedAt }
     _copyTexts: {},        // numeric id → copy text string (avoids putting long text in data attributes)
@@ -1343,7 +1347,8 @@
           locationBucket: loc.bucket,
           locationLabel: loc.label,
           remainingSec: timer.remainingSec,
-          timerSource: timer.source
+          timerSource: timer.source,
+          timerUntilUnix: timer.remainingSec != null ? nowUnix() + timer.remainingSec : null
         };
       });
       addLog(`Own faction: ${STATE.ownMembers.length} members loaded`);
@@ -1651,7 +1656,7 @@
         return;
       }
 
-      // Report section collapse/expand toggle
+      // Report section collapse/expand toggle (enemy)
       const toggle = e.target.closest('.tpda-mgr-report-toggle');
       if (toggle) {
         const key = toggle.dataset.section;
@@ -1663,7 +1668,27 @@
         return;
       }
 
-      // Collapse All / Expand All
+      // Own faction report collapse/expand
+      const ownToggle = e.target.closest('.tpda-mgr-own-toggle');
+      if (ownToggle) {
+        STATE.ownReportCollapsed = !STATE.ownReportCollapsed;
+        renderPanel();
+        return;
+      }
+
+      // Own faction section collapse/expand toggle
+      const ownSectionToggle = e.target.closest('.tpda-mgr-own-section-toggle');
+      if (ownSectionToggle) {
+        const key = ownSectionToggle.dataset.section;
+        if (key) {
+          const current = STATE.ownSectionCollapsed[key] === true;
+          STATE.ownSectionCollapsed[key] = !current;
+          renderPanel();
+        }
+        return;
+      }
+
+      // Collapse All / Expand All (enemy)
       const collapseAll = e.target.closest('.tpda-mgr-collapse-all');
       if (collapseAll) {
         for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = true;
@@ -1673,6 +1698,57 @@
       const expandAll = e.target.closest('.tpda-mgr-expand-all');
       if (expandAll) {
         for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.reportCollapsed[k] = false;
+        renderPanel();
+        return;
+      }
+
+      // Collapse All / Expand All (own)
+      const ownCollapseAll = e.target.closest('.tpda-mgr-own-collapse-all');
+      if (ownCollapseAll) {
+        for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.ownSectionCollapsed[k] = true;
+        renderPanel();
+        return;
+      }
+      const ownExpandAll = e.target.closest('.tpda-mgr-own-expand-all');
+      if (ownExpandAll) {
+        for (const k of ['inTorn', 'hospital', 'abroad', 'jail', 'offlineRecent', 'offlineOld']) STATE.ownSectionCollapsed[k] = false;
+        renderPanel();
+        return;
+      }
+
+      // Select ally member
+      const allySelect = e.target.closest('.tpda-mgr-select-ally');
+      if (allySelect) {
+        const id = allySelect.dataset.memberId;
+        const name = allySelect.dataset.memberName;
+        if (STATE.selectedAlly && STATE.selectedAlly.id === id) {
+          STATE.selectedAlly = null;
+        } else {
+          STATE.selectedAlly = { id, name };
+        }
+        renderPanel();
+        return;
+      }
+
+      // Select enemy member
+      const enemySelect = e.target.closest('.tpda-mgr-select-enemy');
+      if (enemySelect) {
+        const id = enemySelect.dataset.memberId;
+        const name = enemySelect.dataset.memberName;
+        if (STATE.selectedEnemy && STATE.selectedEnemy.id === id) {
+          STATE.selectedEnemy = null;
+        } else {
+          STATE.selectedEnemy = { id, name };
+        }
+        renderPanel();
+        return;
+      }
+
+      // Clear attack suggestion selection
+      const clearSuggestion = e.target.closest('.tpda-mgr-clear-suggestion');
+      if (clearSuggestion) {
+        STATE.selectedAlly = null;
+        STATE.selectedEnemy = null;
         renderPanel();
         return;
       }
@@ -1721,15 +1797,18 @@
     _copyIdCounter = 0;
 
     const ownOnline = STATE.ownMembers.filter(m => m.isOnline && m.locationBucket === 'torn');
+    const ownHospital = STATE.ownMembers.filter(m => m.locationBucket === 'hospital');
     const enemyOnline = STATE.enemyMembers.filter(m => m.isOnline);
     const enemyHospital = STATE.enemyMembers.filter(m => m.locationBucket === 'hospital');
 
     body.innerHTML = `
-      ${renderWarStatusCard(ownOnline, enemyOnline, enemyHospital)}
+      ${renderWarStatusCard(ownOnline, ownHospital, enemyOnline, enemyHospital)}
       ${renderApiKeyCard()}
       ${renderFactionIdCard()}
       ${renderActionBar()}
       ${STATE.lastError ? `<div style="margin-bottom:10px;padding:10px;border:1px solid #5a2d2d;border-radius:10px;background:#221313;color:#ffb3b3;">${escapeHtml(STATE.lastError)}</div>` : ''}
+      ${renderAttackSuggestion()}
+      ${renderOwnFactionReport()}
       ${renderEnemyReport()}
       ${renderLogCard()}
     `;
@@ -1737,11 +1816,11 @@
     attachPanelHandlers();
   }
 
-  function renderWarStatusCard(ownOnline, enemyOnline, enemyHospital) {
+  function renderWarStatusCard(ownOnline, ownHospital, enemyOnline, enemyHospital) {
     return `
       <div style="margin-bottom:10px;padding:10px;border:1px solid #2f3340;border-radius:10px;background:#191b22;">
         <div style="font-weight:bold;margin-bottom:6px;">\u2694\uFE0F War Status</div>
-        <div>Own faction: <strong>${escapeHtml(STATE.ownFactionName || 'Unknown')}</strong> (${ownOnline.length} online in Torn)</div>
+        <div>Own faction: <strong>${escapeHtml(STATE.ownFactionName || 'Unknown')}</strong> (${ownOnline.length} online, ${ownHospital.length} hospital)</div>
         <div>Enemy faction: <strong>${escapeHtml(STATE.enemyFactionName || 'Unknown')}</strong> (${enemyOnline.length} online, ${enemyHospital.length} hospital)</div>
         <div>Enemy ID: ${escapeHtml(STATE.enemyFactionId || 'Not set')}</div>
         ${STATE.detectedWarInfo ? `<div style="color:#ffcc00;">
@@ -1833,6 +1912,29 @@
       } else {
         status = ` — ${e.isOnline ? 'Online' : 'Offline'} in Torn`;
       }
+      return `${e.name}${tag} Lv${e.level || '?'}${status}`;
+    }).join('\n');
+  }
+
+  function generateSectionTextWithLinks(members) {
+    const enriched = enrichWithStats(members);
+    return enriched.map(e => {
+      const est = e.estimate;
+      const tag = est ? ` [${est.label}]` : ' [not scanned]';
+      let status = '';
+      if (e.locationBucket === 'hospital' && e.remainingSec != null) {
+        status = ` — Hospital, out in ${formatSeconds(e.remainingSec)}`;
+      } else if ((e.locationBucket === 'traveling' || e.locationBucket === 'abroad') && e.remainingSec != null) {
+        status = ` — ${e.locationLabel || 'Traveling'} lands ${formatSeconds(e.remainingSec)}`;
+      } else if (e.locationBucket === 'jail' && e.remainingSec != null) {
+        status = ` — Jail ${formatSeconds(e.remainingSec)}`;
+      } else if (e.locationLabel && e.locationBucket !== 'torn') {
+        status = ` — ${e.locationLabel}`;
+      } else if (!e.isOnline) {
+        status = ` — Offline ${e.relative || ''}`;
+      } else {
+        status = ` — ${e.isOnline ? 'Online' : 'Offline'} in Torn`;
+      }
       return `${e.name}${tag} Lv${e.level || '?'}${status} — ${attackUrl(e.id)}`;
     }).join('\n');
   }
@@ -1846,7 +1948,7 @@
     for (const s of sections) {
       if (!s.members.length) continue;
       lines.push(`=== ${s.title} (${s.members.length}) ===`);
-      lines.push(generateSectionText(s.members));
+      lines.push(generateSectionTextWithLinks(s.members));
       lines.push('');
     }
     return lines.join('\n').trim();
@@ -1904,11 +2006,15 @@
     const statusColor = e.isOnline ? '#4caf50' : '#888';
     const statusDot = e.isOnline ? '\uD83D\uDFE2' : '\u26AA';
     const offlineInfo = !e.isOnline && e.relative ? ` <span style="color:#666;font-size:10px;">${escapeHtml(e.relative)}</span>` : '';
+    const isSelected = STATE.selectedEnemy && STATE.selectedEnemy.id === e.id;
+    const nameStyle = isSelected
+      ? 'color:#ff8a8a;cursor:pointer;user-select:none;text-decoration:underline;background:#3a1a1a;padding:1px 4px;border-radius:4px;'
+      : 'color:#ff8a8a;cursor:pointer;user-select:none;';
     return `
       <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
         <div>
           <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
-          <span class="mgr-enemy"><strong>${escapeHtml(e.name)}</strong></span>
+          <span class="tpda-mgr-select-enemy" data-member-id="${escapeHtml(e.id)}" data-member-name="${escapeHtml(e.name)}" style="${nameStyle}"><strong>${escapeHtml(e.name)}</strong>${isSelected ? ' \u2714' : ''}</span>
           ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
           ${statBadge}
           <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
@@ -1939,6 +2045,144 @@
     }
     html += `</div>`;
     return html;
+  }
+
+  function renderOwnMemberRow(e) {
+    const est = e.estimate;
+    const statBadge = est
+      ? ` <span style="color:${est.color};font-weight:bold;">[${escapeHtml(est.label)}]</span>`
+      : ' <span style="color:#555;font-size:10px;">[not scanned]</span>';
+    let timerNote = '';
+    if (e.remainingSec != null && e.timerUntilUnix) {
+      const timerColors = { hospital: '#ffd166', jail: '#ff6b6b', traveling: '#42a5f5', abroad: '#42a5f5' };
+      const timerIcons  = { hospital: '\u23F0', jail: '\uD83D\uDD12', traveling: '\u2708\uFE0F', abroad: '\u2708\uFE0F' };
+      const col = timerColors[e.locationBucket] || '#aaa';
+      const icon = timerIcons[e.locationBucket] || '\u23F0';
+      timerNote = ` <span style="color:${col};font-size:11px;">${icon} <span class="tpda-mgr-timer" data-until="${e.timerUntilUnix}">${formatSeconds(e.remainingSec)}</span></span>`;
+    }
+    const statusColor = e.isOnline ? '#4caf50' : '#888';
+    const statusDot = e.isOnline ? '\uD83D\uDFE2' : '\u26AA';
+    const offlineInfo = !e.isOnline && e.relative ? ` <span style="color:#666;font-size:10px;">${escapeHtml(e.relative)}</span>` : '';
+    const isSelected = STATE.selectedAlly && STATE.selectedAlly.id === e.id;
+    const nameStyle = isSelected
+      ? 'color:#7ecfff;cursor:pointer;user-select:none;text-decoration:underline;background:#1a3352;padding:1px 4px;border-radius:4px;'
+      : 'color:#7ecfff;cursor:pointer;user-select:none;';
+    return `
+      <div style="padding:5px 0;border-top:1px solid #2a2d38;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+        <div>
+          <span style="color:${statusColor};font-size:10px;">${statusDot}</span>
+          <span class="tpda-mgr-select-ally" data-member-id="${escapeHtml(e.id)}" data-member-name="${escapeHtml(e.name)}" style="${nameStyle}"><strong>${escapeHtml(e.name)}</strong>${isSelected ? ' \u2714' : ''}</span>
+          ${e.level ? ` Lv${escapeHtml(String(e.level))}` : ''}
+          ${statBadge}
+          <span style="color:#888;font-size:11px;">\u2022 ${escapeHtml(e.locationLabel)}</span>
+          ${timerNote}${offlineInfo}
+        </div>
+        <div style="display:flex;gap:4px;">
+          <a href="${escapeHtml(profileUrl(e.id))}" target="_blank" rel="noopener"
+             style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:3px 8px;text-decoration:none;white-space:nowrap;">Profile</a>
+        </div>
+      </div>`;
+  }
+
+  function renderOwnReportSection(section) {
+    if (!section.members.length) return '';
+    const collapsed = STATE.ownSectionCollapsed[section.key] === true;
+    const arrow = collapsed ? '\u25B6' : '\u25BC';
+    const copyId = registerCopyText(generateSectionText(section.members));
+
+    let html = `<div style="margin-top:6px;">`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 6px;border-radius:6px;background:${collapsed ? '#1a1d26' : 'transparent'};">`;
+    html += `<div class="tpda-mgr-own-section-toggle" data-section="${section.key}" style="font-size:12px;color:${section.color};font-weight:bold;cursor:pointer;user-select:none;flex:1;padding:2px 0;">${arrow} ${escapeHtml(section.title)} (${section.members.length})</div>`;
+    html += `<button class="tpda-mgr-copy-btn" data-copy-id="${copyId}" style="font-size:10px;background:${section.color};color:#000;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;">Copy</button>`;
+    html += `</div>`;
+    if (!collapsed) {
+      html += section.members.map(renderOwnMemberRow).join('');
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function renderOwnFactionReport() {
+    const all = STATE.ownMembers;
+    if (!all.length) return '';
+
+    const onlineCount = all.filter(m => m.isOnline).length;
+    const hospitalCount = all.filter(m => m.locationBucket === 'hospital').length;
+    const collapsed = STATE.ownReportCollapsed;
+    const arrow = collapsed ? '\u25B6' : '\u25BC';
+
+    if (collapsed) {
+      return `
+        <div style="margin-bottom:10px;padding:10px;border:1px solid #42a5f5;border-radius:10px;background:#111822;cursor:pointer;" class="tpda-mgr-own-toggle">
+          <div style="font-weight:bold;color:#42a5f5;">${arrow} ${escapeHtml(STATE.ownFactionName || 'Own Faction')} (${onlineCount} online / ${hospitalCount} hosp / ${all.length} total)</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">Tap to expand \u2022 Click names to select attacker</div>
+        </div>`;
+    }
+
+    const enriched = enrichWithStats(all).sort((a, b) => a.midpoint - b.midpoint);
+    const sections = buildReportSections(enriched);
+    const scannedCount = all.filter(m => STATE.profileCache[m.id]?.estimate).length;
+
+    let rows = '';
+    for (const s of sections) {
+      rows += renderOwnReportSection(s);
+    }
+
+    const scanHint = scannedCount === 0
+      ? `<div style="font-size:10px;color:#888;margin-top:4px;">Tap "Scan Stats" to see battle stat estimates</div>`
+      : scannedCount < all.length
+        ? `<div style="font-size:10px;color:#888;margin-top:4px;">${scannedCount}/${all.length} scanned</div>`
+        : '';
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #42a5f5;border-radius:10px;background:#111822;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
+          <div class="tpda-mgr-own-toggle" style="font-weight:bold;color:#42a5f5;cursor:pointer;user-select:none;">${arrow} ${escapeHtml(STATE.ownFactionName || 'Own Faction')} (${onlineCount} online / ${hospitalCount} hosp / ${all.length} total)</div>
+        </div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Click a name to select attacker</div>
+        <div style="display:flex;gap:4px;margin-bottom:6px;">
+          <button class="tpda-mgr-own-expand-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Expand All</button>
+          <button class="tpda-mgr-own-collapse-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Collapse All</button>
+        </div>
+        ${scanHint}
+        <div style="max-height:350px;overflow-y:auto;">
+          ${rows}
+        </div>
+      </div>`;
+  }
+
+  function renderAttackSuggestion() {
+    if (!STATE.selectedAlly && !STATE.selectedEnemy) return '';
+
+    const allyName = STATE.selectedAlly ? STATE.selectedAlly.name : '(select attacker)';
+    const enemyName = STATE.selectedEnemy ? STATE.selectedEnemy.name : '(select target)';
+    const allyEnriched = STATE.selectedAlly ? enrichWithStats([STATE.ownMembers.find(m => m.id === STATE.selectedAlly.id)].filter(Boolean))[0] : null;
+    const enemyEnriched = STATE.selectedEnemy ? enrichWithStats([STATE.enemyMembers.find(m => m.id === STATE.selectedEnemy.id)].filter(Boolean))[0] : null;
+
+    const allyStats = allyEnriched?.estimate ? ` [${allyEnriched.estimate.label}]` : '';
+    const enemyStats = enemyEnriched?.estimate ? ` [${enemyEnriched.estimate.label}]` : '';
+    const allyLevel = allyEnriched?.level ? ` Lv${allyEnriched.level}` : '';
+    const enemyLevel = enemyEnriched?.level ? ` Lv${enemyEnriched.level}` : '';
+
+    const canCopy = STATE.selectedAlly && STATE.selectedEnemy;
+    const suggestionText = canCopy
+      ? `${allyName}${allyStats}${allyLevel} → attack ${enemyName}${enemyStats}${enemyLevel} — ${attackUrl(STATE.selectedEnemy.id)}`
+      : '';
+    const copyId = canCopy ? registerCopyText(suggestionText) : '';
+
+    return `
+      <div style="margin-bottom:10px;padding:10px;border:1px solid #e67e22;border-radius:10px;background:#1c1710;">
+        <div style="font-weight:bold;color:#e67e22;margin-bottom:6px;">\uD83C\uDFAF Attack Suggestion</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+          <span style="color:#7ecfff;font-weight:bold;">${escapeHtml(allyName)}${allyStats ? ` <span style="font-size:11px;color:#aaa;">${escapeHtml(allyStats)}</span>` : ''}</span>
+          <span style="color:#e67e22;font-size:16px;">\u2192</span>
+          <span style="color:#ff8a8a;font-weight:bold;">${escapeHtml(enemyName)}${enemyStats ? ` <span style="font-size:11px;color:#aaa;">${escapeHtml(enemyStats)}</span>` : ''}</span>
+        </div>
+        <div style="display:flex;gap:6px;">
+          ${canCopy ? `<button class="tpda-mgr-copy-btn" data-copy-id="${copyId}" style="font-size:11px;background:#e67e22;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;">Copy Suggestion</button>` : ''}
+          <button class="tpda-mgr-clear-suggestion" style="font-size:11px;background:#444;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;">Clear</button>
+        </div>
+      </div>`;
   }
 
   function renderEnemyReport() {
@@ -1996,6 +2240,7 @@
           <button class="tpda-mgr-expand-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Expand All</button>
           <button class="tpda-mgr-collapse-all" style="font-size:10px;background:#2f3340;color:#bbb;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;">Collapse All</button>
         </div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Click a name to select target</div>
         ${scanHint}
         <div style="max-height:450px;overflow-y:auto;">
           ${rows}
