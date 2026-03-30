@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.5.1
+// @version      1.6.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -57,7 +57,7 @@
     return {
       sortBy: 'signal',       /* 'signal' | 'change' | 'price' | 'acronym' | 'roi' */
       sortAsc: false,
-      showOnlyWatchlist: false,
+      showOnlyWatchlist: true,
       showOnlyOwned: false,
       showOnlyNotOwned: false,
       showOnlySignals: false,
@@ -83,7 +83,12 @@
   function loadSettings() {
     const saved = getStorage(SETTINGS_KEY, null);
     if (!saved) return defaultSettings();
-    return { ...defaultSettings(), ...saved };
+    const merged = { ...defaultSettings(), ...saved };
+    if (!saved._migratedWatchlistDefault) {
+      merged.showOnlyWatchlist = true;
+      merged._migratedWatchlistDefault = true;
+    }
+    return merged;
   }
 
   function saveSettings() {
@@ -125,6 +130,7 @@
     activeTab: 'overview',           /* 'overview' | 'detail' | 'holdings' | 'settings' */
     previousTab: 'overview',         /* tab to return to from detail view */
     detailStock: null,               /* acronym of stock being viewed in detail */
+    savedScrollTop: 0,               /* scroll position before entering detail */
     pollTimer: null,
     ui: {
       minimized: true,
@@ -1179,12 +1185,16 @@
       STATE.activeTab = STATE.previousTab || 'overview';
       STATE.detailStock = null;
       renderPanel();
+      const bdy = getPanelEl()?.querySelector('.tpda-stock-body');
+      if (bdy) bdy.scrollTop = STATE.savedScrollTop || 0;
       return;
     }
 
     /* Stock row click → detail */
     const stockRow = e.target.closest('[data-stock]');
     if (stockRow) {
+      const bdy = getPanelEl()?.querySelector('.tpda-stock-body');
+      STATE.savedScrollTop = bdy ? bdy.scrollTop : 0;
       STATE.previousTab = STATE.activeTab;
       STATE.detailStock = stockRow.dataset.stock;
       STATE.activeTab = 'detail';
