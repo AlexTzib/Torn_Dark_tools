@@ -1974,7 +1974,7 @@
         cursor:pointer; font-weight:900; font-size:18px; color:#1a1a2e; box-shadow:0 4px 16px rgba(244,183,64,.5);
         user-select:none; touch-action:none; z-index:${STATE.ui.zIndexBase}; transition:box-shadow .2s; }
       #${BUBBLE_ID}:hover { box-shadow:0 4px 24px rgba(244,183,64,.8); }
-      #${PANEL_ID} { position:fixed; width:400px; max-height:85vh; display:none; flex-direction:column;
+      #${PANEL_ID} { position:fixed; width:400px; max-width:95vw; max-height:85vh; display:none; flex-direction:column;
         background:#0d0f14; border:1px solid #2f3340; border-radius:14px; overflow:hidden;
         box-shadow:0 8px 32px rgba(0,0,0,.6); z-index:${STATE.ui.zIndexBase + 1};
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; font-size:13px; color:#fff; }
@@ -2003,8 +2003,11 @@
     el.setAttribute('data-tpda-bubble', '1');
     el.textContent = '$';
     const pos = getBubblePosition();
-    el.style.right = pos.right + 'px';
-    el.style.bottom = pos.bottom + 'px';
+    const lt = bubbleRightBottomToLeftTop(pos, BUBBLE_SIZE);
+    const clamped = clampToViewport(lt.left, lt.top, BUBBLE_SIZE, BUBBLE_SIZE);
+    const safe = leftTopToBubbleRightBottom(clamped.left, clamped.top, BUBBLE_SIZE);
+    el.style.right = safe.right + 'px';
+    el.style.bottom = safe.bottom + 'px';
     document.body.appendChild(el);
     makeDraggableBubble(el);
     el.addEventListener('click', (e) => {
