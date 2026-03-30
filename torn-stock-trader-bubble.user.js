@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.3.0
+// @version      1.4.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1880,6 +1880,16 @@
     return '\u25CF';
   }
 
+  function stockLogo(stockId, size) {
+    const sz = size || 22;
+    const fbSz = Math.round(sz * 0.45);
+    return `<img src="https://yata.yt/media/stocks/${encodeURIComponent(stockId)}.png" `
+      + `width="${sz}" height="${sz}" style="border-radius:4px;vertical-align:middle;object-fit:contain;background:#1a1e2a;" `
+      + `onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';" />`
+      + `<span style="display:none;width:${sz}px;height:${sz}px;border-radius:4px;background:#2a2e3a;color:#888;`
+      + `font-size:${fbSz}px;font-weight:700;align-items:center;justify-content:center;vertical-align:middle;"></span>`;
+  }
+
   function getChangeColor(pct) {
     if (pct > 0) return '#4caf50';
     if (pct < 0) return '#f44336';
@@ -2176,6 +2186,7 @@
       html += `<div class="tpda-stock-row" data-stock="${escapeHtml(stock.acronym)}">
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;">
+            ${stockLogo(stock.id, 22)}
             <span style="font-weight:700;color:${isWatchlisted ? '#ffd740' : '#fff'};">${escapeHtml(stock.acronym)}</span>
             ${holding ? '<span style="font-size:10px;color:#4caf50;">\u25CF owned</span>' : ''}
             <span style="font-size:11px;color:#888;">${escapeHtml(stock.name || '')}</span>
@@ -2215,6 +2226,7 @@
 
     let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <button class="tpda-stock-btn tpda-stock-back" style="background:#2a2e3a;color:#fff;">\u2190 Back</button>
+      ${stockLogo(stock.id, 28)}
       <span style="font-weight:700;font-size:16px;">${escapeHtml(acronym)}</span>
       <span style="color:#888;">${escapeHtml(stock.name || '')}</span>
       <button class="tpda-stock-btn tpda-stock-watchlist-toggle" data-acr="${escapeHtml(acronym)}"
@@ -2382,7 +2394,8 @@
 
       html += `<div class="tpda-stock-card" style="cursor:pointer;" data-stock="${escapeHtml(stock.acronym)}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${stockLogo(stock.id, 22)}
             <span style="font-weight:700;">${escapeHtml(stock.acronym)}</span>
             <span style="font-size:11px;color:#888;">${escapeHtml(stock.name || '')}</span>
           </div>
