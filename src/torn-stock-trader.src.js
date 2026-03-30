@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.1.0
+// @version      1.2.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -63,7 +63,20 @@
       showOnlySignals: false,
       notifyEnabled: false,
       notifyOnBuy: true,
-      notifyOnSell: true
+      notifyOnSell: true,
+      /* Signal score thresholds */
+      strongBuyScore: 4,
+      buyScore: 2,
+      leanBuyScore: 0.5,
+      leanSellScore: -0.5,
+      sellScore: -2,
+      strongSellScore: -4,
+      /* RSI thresholds */
+      rsiOversold: 30,
+      rsiOverbought: 70,
+      /* Benefit ROI thresholds */
+      roiGoodPct: 2,
+      roiGreatPct: 5
     };
   }
 
@@ -110,6 +123,7 @@
     scanTotal: 0,
     lastError: '',
     activeTab: 'overview',           /* 'overview' | 'detail' | 'holdings' | 'settings' */
+    previousTab: 'overview',         /* tab to return to from detail view */
     detailStock: null,               /* acronym of stock being viewed in detail */
     pollTimer: null,
     ui: {
@@ -325,6 +339,7 @@
   function computeStockSignal(acronym) {
     const reasons = [];
     let score = 0; /* positive = buy, negative = sell */
+    const S = STATE.settings;
 
     const stock = STATE.marketStocks.find(s => s.acronym === acronym);
     if (!stock) return { signal: 'HOLD', strength: 0, reasons: ['No market data'] };
@@ -394,10 +409,10 @@
       /* RSI */
       const rsi = computeRSI(histPrices, 14);
       if (rsi !== null) {
-        if (rsi < 30) { score += 2; reasons.push(`RSI ${rsi.toFixed(0)} — oversold (buy opportunity)`); }
-        else if (rsi < 40) { score += 0.5; reasons.push(`RSI ${rsi.toFixed(0)} — approaching oversold`); }
-        else if (rsi > 70) { score -= 2; reasons.push(`RSI ${rsi.toFixed(0)} — overbought (sell signal)`); }
-        else if (rsi > 60) { score -= 0.5; reasons.push(`RSI ${rsi.toFixed(0)} — approaching overbought`); }
+        if (rsi < S.rsiOversold) { score += 2; reasons.push(`RSI ${rsi.toFixed(0)} — oversold < ${S.rsiOversold} (buy opportunity)`); }
+        else if (rsi < S.rsiOversold + 10) { score += 0.5; reasons.push(`RSI ${rsi.toFixed(0)} — approaching oversold`); }
+        else if (rsi > S.rsiOverbought) { score -= 2; reasons.push(`RSI ${rsi.toFixed(0)} — overbought > ${S.rsiOverbought} (sell signal)`); }
+        else if (rsi > S.rsiOverbought - 10) { score -= 0.5; reasons.push(`RSI ${rsi.toFixed(0)} — approaching overbought`); }
       }
 
       /* Price vs EMA — trend confirmation */
@@ -425,18 +440,18 @@
       const investmentCost = benefit.shares * price;
       const annualReturn = (benefit.cashValue / benefit.freqDays) * 365;
       const roi = (annualReturn / investmentCost) * 100;
-      if (roi > 5) { score += 1; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr (strong passive income)`); }
-      else if (roi > 2) { score += 0.5; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr`); }
+      if (roi > S.roiGreatPct) { score += 1; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr > ${S.roiGreatPct}% (strong passive income)`); }
+      else if (roi > S.roiGoodPct) { score += 0.5; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr > ${S.roiGoodPct}%`); }
     }
 
     /* ── Determine signal ─────────────────────────────────── */
     let signal, strength;
-    if (score >= 4) { signal = 'STRONG BUY'; strength = 5; }
-    else if (score >= 2) { signal = 'BUY'; strength = 4; }
-    else if (score >= 0.5) { signal = 'LEAN BUY'; strength = 3; }
-    else if (score <= -4) { signal = 'STRONG SELL'; strength = -5; }
-    else if (score <= -2) { signal = 'SELL'; strength = -4; }
-    else if (score <= -0.5) { signal = 'LEAN SELL'; strength = -3; }
+    if (score >= S.strongBuyScore) { signal = 'STRONG BUY'; strength = 5; }
+    else if (score >= S.buyScore) { signal = 'BUY'; strength = 4; }
+    else if (score >= S.leanBuyScore) { signal = 'LEAN BUY'; strength = 3; }
+    else if (score <= S.strongSellScore) { signal = 'STRONG SELL'; strength = -5; }
+    else if (score <= S.sellScore) { signal = 'SELL'; strength = -4; }
+    else if (score <= S.leanSellScore) { signal = 'LEAN SELL'; strength = -3; }
     else { signal = 'HOLD'; strength = 0; }
 
     return { signal, strength, score, reasons };
@@ -648,6 +663,24 @@
       if (handleApiKeyClick(e, body, () => renderPanel())) return;
       if (handleLogClick(e, body)) return;
       handlePanelClick(e, body);
+    });
+    body.addEventListener('change', (e) => {
+      const numInput = e.target.closest('.tpda-stock-num-setting');
+      if (numInput) {
+        const val = parseFloat(numInput.value);
+        if (!isNaN(val)) {
+          STATE.settings[numInput.dataset.key] = val;
+          saveSettings();
+          computeAllSignals();
+          addLog('Setting ' + numInput.dataset.key + ' = ' + val);
+        }
+      }
+      const sortSel = e.target.closest('.tpda-stock-sort');
+      if (sortSel) {
+        STATE.settings.sortBy = sortSel.value;
+        saveSettings();
+        renderPanel();
+      }
     });
   }
 
@@ -988,8 +1021,44 @@
     return summaryHtml + html;
   }
 
+  function settingRow(label, key, step, min, max) {
+    return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#bbb;margin-bottom:4px;">
+      <span>${label}</span>
+      <input type="number" class="tpda-stock-num-setting" data-key="${key}" value="${STATE.settings[key]}"
+        step="${step}" ${min != null ? 'min="' + min + '"' : ''} ${max != null ? 'max="' + max + '"' : ''}
+        style="width:64px;background:#0f1116;color:#fff;border:1px solid #444;border-radius:6px;padding:3px 6px;font-size:12px;text-align:right;" />
+    </div>`;
+  }
+
   function renderSettingsTab() {
     let html = '';
+
+    /* Signal score thresholds */
+    html += `<div class="tpda-stock-card">
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px;">Signal Thresholds</div>
+      <div style="font-size:10px;color:#666;margin-bottom:6px;">Score needed to trigger each signal level</div>
+      ${settingRow('Strong Buy \u2265', 'strongBuyScore', 0.5, 0)}
+      ${settingRow('Buy \u2265', 'buyScore', 0.5, 0)}
+      ${settingRow('Lean Buy \u2265', 'leanBuyScore', 0.1, 0)}
+      ${settingRow('Lean Sell \u2264', 'leanSellScore', 0.1, null, 0)}
+      ${settingRow('Sell \u2264', 'sellScore', 0.5, null, 0)}
+      ${settingRow('Strong Sell \u2264', 'strongSellScore', 0.5, null, 0)}
+    </div>`;
+
+    /* RSI thresholds */
+    html += `<div class="tpda-stock-card">
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px;">RSI Thresholds</div>
+      ${settingRow('Oversold below', 'rsiOversold', 5, 5, 50)}
+      ${settingRow('Overbought above', 'rsiOverbought', 5, 50, 95)}
+    </div>`;
+
+    /* Benefit ROI thresholds */
+    html += `<div class="tpda-stock-card">
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px;">Benefit ROI</div>
+      <div style="font-size:10px;color:#666;margin-bottom:6px;">Annual ROI % to boost buy signal for dividend stocks</div>
+      ${settingRow('Good ROI \u2265', 'roiGoodPct', 0.5, 0)}
+      ${settingRow('Great ROI \u2265', 'roiGreatPct', 0.5, 0)}
+    </div>`;
 
     /* Watchlist management */
     html += `<div class="tpda-stock-card">
@@ -1062,7 +1131,7 @@
 
     /* Back from detail */
     if (e.target.closest('.tpda-stock-back')) {
-      STATE.activeTab = 'overview';
+      STATE.activeTab = STATE.previousTab || 'overview';
       STATE.detailStock = null;
       renderPanel();
       return;
@@ -1071,6 +1140,7 @@
     /* Stock row click → detail */
     const stockRow = e.target.closest('[data-stock]');
     if (stockRow) {
+      STATE.previousTab = STATE.activeTab;
       STATE.detailStock = stockRow.dataset.stock;
       STATE.activeTab = 'detail';
       renderPanel();
@@ -1177,6 +1247,18 @@
       saveSettings();
       if (settingCb.dataset.key === 'notifyEnabled' && settingCb.checked) {
         tpdaRequestNotifyPermission();
+      }
+      return;
+    }
+
+    /* Number setting inputs — handled on click of +/- spinner */
+    const numInput = e.target.closest('.tpda-stock-num-setting');
+    if (numInput) {
+      const val = parseFloat(numInput.value);
+      if (!isNaN(val)) {
+        STATE.settings[numInput.dataset.key] = val;
+        saveSettings();
+        computeAllSignals();
       }
       return;
     }
