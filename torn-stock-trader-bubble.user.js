@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.7.0
+// @version      1.8.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -126,6 +126,8 @@
     scanning: false,
     scanProgress: 0,
     scanTotal: 0,
+    scanCurrentAcr: '',
+    freshlyLoaded: {},
     lastError: '',
     activeTab: 'overview',           /* 'overview' | 'detail' | 'holdings' | 'settings' */
     previousTab: 'overview',         /* tab to return to from detail view */
@@ -1608,6 +1610,7 @@
   async function fetchWatchlistDetails() {
     if (!STATE.apiKey || STATE.scanning) return;
     STATE.scanning = true;
+    STATE.freshlyLoaded = {};
     const stocksToFetch = [];
     const now = Date.now();
     for (const acr of STATE.watchlist) {
@@ -1619,12 +1622,17 @@
     }
     STATE.scanTotal = stocksToFetch.length;
     STATE.scanProgress = 0;
+    STATE.scanCurrentAcr = '';
     addLog('Fetching details for ' + stocksToFetch.length + ' watchlist stocks...');
+    renderPanel();
     for (const stock of stocksToFetch) {
+      STATE.scanCurrentAcr = stock.acronym;
+      renderPanel();
       const detail = await fetchStockDetail(stock.id);
       STATE.scanProgress++;
       if (detail) {
         STATE.stockDetails[stock.acronym] = { ...detail, fetchedAt: Date.now() };
+        STATE.freshlyLoaded[stock.acronym] = Date.now();
         addLog('Detail fetched: ' + stock.acronym);
       }
       if (STATE.scanProgress < STATE.scanTotal) await sleep(API_DELAY_MS);
@@ -1632,8 +1640,10 @@
     }
     saveDetailCache();
     STATE.scanning = false;
+    STATE.scanCurrentAcr = '';
     computeAllSignals();
     renderPanel();
+    setTimeout(() => { STATE.freshlyLoaded = {}; renderPanel(); }, 3000);
   }
 
   async function fetchUserStocks() {
@@ -2032,6 +2042,8 @@
         border-bottom:1px solid #1e222d; cursor:pointer; transition:background .15s; }
       .tpda-stock-row:hover { background:#1a1e2a; }
       .tpda-stock-row:last-child { border-bottom:none; }
+      .tpda-stock-row.tpda-fresh { animation: tpda-glow 1.5s ease-out; }
+      @keyframes tpda-glow { 0% { background:#2a6df433; } 100% { background:transparent; } }
       .tpda-stock-tabs { display:flex; gap:2px; padding:0 10px 8px; }
       .tpda-stock-tab { flex:1; padding:6px 0; text-align:center; border-radius:8px; cursor:pointer;
         background:#1a1e2a; color:#888; font-size:12px; font-weight:600; transition:all .15s; }
@@ -2129,12 +2141,23 @@
 
     /* ── Status bar ────────────────────────────────────────── */
     if (STATE.scanning) {
-      html += `<div style="padding:4px 10px;font-size:11px;color:#ffd740;">Scanning ${STATE.scanProgress}/${STATE.scanTotal}...</div>`;
+      const pct = STATE.scanTotal > 0 ? Math.round((STATE.scanProgress / STATE.scanTotal) * 100) : 0;
+      html += `<div style="padding:6px 10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:11px;color:#ffd740;">Refreshing ${STATE.scanProgress}/${STATE.scanTotal}${STATE.scanCurrentAcr ? ' \u2014 ' + escapeHtml(STATE.scanCurrentAcr) : ''}...</span>
+          <span style="font-size:11px;color:#ffd740;">${pct}%</span>
+        </div>
+        <div style="height:4px;background:#1a1e2a;border-radius:2px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:#2a6df4;border-radius:2px;transition:width 0.3s;"></div>
+        </div>
+      </div>`;
     } else if (STATE.marketFetchedAt) {
       const signalCount = Object.values(STATE.signals).filter(s => s.signal !== 'HOLD').length;
-      html += `<div style="padding:4px 10px;font-size:11px;color:#888;">
-        ${STATE.marketStocks.length} stocks \u2022 ${signalCount} signals \u2022 Updated ${ageText(STATE.marketFetchedAt)}
-        <span class="tpda-stock-refresh" style="color:#2a6df4;cursor:pointer;margin-left:8px;">\u21BB Refresh</span>
+      html += `<div style="padding:4px 10px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;color:#888;">
+          ${STATE.marketStocks.length} stocks \u2022 ${signalCount} signals \u2022 ${ageText(STATE.marketFetchedAt)}
+        </span>
+        <button class="tpda-stock-refresh" style="background:#2a6df4;color:#fff;border:none;border-radius:8px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer;">\u21BB Refresh</button>
       </div>`;
     }
 
@@ -2198,6 +2221,7 @@
       const isWatchlisted = STATE.watchlist.includes(stock.acronym);
       const holding = getUserHolding(stock.id);
       const label = contextSignal(sig.signal, !!holding);
+      const isFresh = !!STATE.freshlyLoaded[stock.acronym];
 
       let pnlNote = '';
       if (holding && sig.strength < 0 && holding.transactions && holding.transactions.length) {
@@ -2207,7 +2231,7 @@
         pnlNote = `<div style="font-size:10px;color:${pnl >= 0 ? '#4caf50' : '#f44336'};margin-top:1px;">P&L: ${formatMoney(pnl)} (${formatPct(pnlPct)})</div>`;
       }
 
-      html += `<div class="tpda-stock-row" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
+      html += `<div class="tpda-stock-row${isFresh ? ' tpda-fresh' : ''}" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;">
             ${stockLogo(stock.id, 22, stock.acronym)}
@@ -2578,7 +2602,7 @@
     if (e.target.closest('.tpda-stock-refresh')) {
       STATE.marketFetchedAt = 0;
       STATE.userFetchedAt = 0;
-      refreshIfStale();
+      refreshIfStale().then(() => fetchWatchlistDetails());
       return;
     }
 
