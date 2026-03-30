@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.0.0
+// @version      1.0.1
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1902,7 +1902,7 @@
       return `${x},${y}`;
     }).join(' ');
     const startColor = prices[prices.length - 1] >= prices[0] ? '#4caf50' : '#f44336';
-    return `<svg width="${width}" height="${height}" style="vertical-align:middle;">` +
+    return `<svg viewBox="0 0 ${width} ${height}" width="100%" style="display:block;" preserveAspectRatio="xMidYMid meet">` +
       `<polyline points="${points}" fill="none" stroke="${startColor}" stroke-width="1.5" />` +
       `</svg>`;
   }
@@ -2219,7 +2219,7 @@
       ];
       html += `<div class="tpda-stock-card">
         <div style="font-size:12px;font-weight:600;margin-bottom:6px;">Performance</div>
-        <table style="width:100%;font-size:11px;border-collapse:collapse;">
+        <table style="width:100%;font-size:11px;border-collapse:collapse;color:#ccc;">
           <tr style="color:#888;"><th style="text-align:left;padding:2px 4px;">Period</th><th style="text-align:right;padding:2px 4px;">Change</th><th style="text-align:right;padding:2px 4px;">High</th><th style="text-align:right;padding:2px 4px;">Low</th></tr>`;
       for (const [label, p] of periods) {
         if (!p) continue;
