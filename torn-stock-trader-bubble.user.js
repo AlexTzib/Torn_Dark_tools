@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.0.1
+// @version      1.0.2
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -2224,10 +2224,10 @@
       for (const [label, p] of periods) {
         if (!p) continue;
         html += `<tr>
-          <td style="padding:2px 4px;">${label}</td>
+          <td style="padding:2px 4px;color:#ccc;">${label}</td>
           <td style="padding:2px 4px;text-align:right;color:${getChangeColor(p.change_percentage)};">${formatPct(p.change_percentage)}</td>
-          <td style="padding:2px 4px;text-align:right;">${formatPrice(p.high)}</td>
-          <td style="padding:2px 4px;text-align:right;">${formatPrice(p.low)}</td>
+          <td style="padding:2px 4px;text-align:right;color:#ccc;">${formatPrice(p.high)}</td>
+          <td style="padding:2px 4px;text-align:right;color:#ccc;">${formatPrice(p.low)}</td>
         </tr>`;
       }
       html += `</table></div>`;
