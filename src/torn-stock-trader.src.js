@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.0.2
+// @version      1.1.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -59,6 +59,7 @@
       sortAsc: false,
       showOnlyWatchlist: false,
       showOnlyOwned: false,
+      showOnlyNotOwned: false,
       showOnlySignals: false,
       notifyEnabled: false,
       notifyOnBuy: true,
@@ -527,6 +528,10 @@
       const ownedIds = new Set(STATE.userStocks.map(u => u.id));
       stocks = stocks.filter(st => ownedIds.has(st.id));
     }
+    if (s.showOnlyNotOwned) {
+      const ownedIds = new Set(STATE.userStocks.map(u => u.id));
+      stocks = stocks.filter(st => !ownedIds.has(st.id));
+    }
     if (s.showOnlySignals) {
       stocks = stocks.filter(st => {
         const sig = STATE.signals[st.acronym];
@@ -714,6 +719,9 @@
       </label>
       <label style="font-size:11px;color:#aaa;cursor:pointer;">
         <input type="checkbox" class="tpda-stock-filter" data-filter="showOnlyOwned" ${STATE.settings.showOnlyOwned ? 'checked' : ''} style="margin-right:3px;" />Owned
+      </label>
+      <label style="font-size:11px;color:#aaa;cursor:pointer;">
+        <input type="checkbox" class="tpda-stock-filter" data-filter="showOnlyNotOwned" ${STATE.settings.showOnlyNotOwned ? 'checked' : ''} style="margin-right:3px;" />Not Owned
       </label>
       <label style="font-size:11px;color:#aaa;cursor:pointer;">
         <input type="checkbox" class="tpda-stock-filter" data-filter="showOnlySignals" ${STATE.settings.showOnlySignals ? 'checked' : ''} style="margin-right:3px;" />Signals Only
@@ -1153,7 +1161,10 @@
     /* Filter checkboxes */
     const filterCb = e.target.closest('.tpda-stock-filter');
     if (filterCb) {
-      STATE.settings[filterCb.dataset.filter] = filterCb.checked;
+      const key = filterCb.dataset.filter;
+      STATE.settings[key] = filterCb.checked;
+      if (key === 'showOnlyOwned' && filterCb.checked) STATE.settings.showOnlyNotOwned = false;
+      if (key === 'showOnlyNotOwned' && filterCb.checked) STATE.settings.showOnlyOwned = false;
       saveSettings();
       renderPanel();
       return;
