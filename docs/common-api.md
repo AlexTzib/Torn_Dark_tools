@@ -593,3 +593,4 @@ Called when panel closes. Use for scan cancellation, timer cleanup, etc.
 | Bounty Filter | Orange `#e65100` | 999950 |
 | War Manager | Orange `#e67e22` | 999945 |
 | Market Sniper | Green `#2ecc40` | 999940 |
+| Stock Trader | Gold `#f4b740` | 999930 |

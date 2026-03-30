@@ -44,7 +44,8 @@ Torn_Dark_tools/
 │   ├── torn-war-manager.src.js            ← War Manager source
 │   ├── torn-bounty-filter.src.js          ← Bounty Filter source
 │   ├── torn-market-sniper.src.js          ← Market Sniper source
-│   └── torn-traveler-utility.src.js       ← Traveler Utility source
+│   ├── torn-traveler-utility.src.js       ← Traveler Utility source
+│   └── torn-stock-trader.src.js           ← Stock Trader source
 ├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
@@ -60,7 +61,9 @@ Torn_Dark_tools/
 ├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
 ├── torn-market-sniper-bubble.md           ← Market Sniper documentation
 ├── torn-traveler-utility-bubble.user.js   ← Traveler Utility bubble (built output)
-└── torn-traveler-utility.md               ← Traveler Utility documentation
+├── torn-traveler-utility.md               ← Traveler Utility documentation
+├── torn-stock-trader-bubble.user.js       ← Stock Trader bubble (built output)
+└── torn-stock-trader.md                   ← Stock Trader documentation
 ```
 
 - **Remote:** `https://github.com/AlexTzib/Torn_Dark_tools.git`
@@ -359,6 +362,7 @@ Each script uses a unique z-index base so they can coexist:
 
 | Script | z-index base | Bubble ID | Panel ID |
 |---|---|---|---|
+| Stock Trader | 999930 | `tpda-stock-bubble` | `tpda-stock-panel` |
 | Traveler Utility | 999935 | `tpda-traveler-bubble` | `tpda-traveler-panel` |
 | Market Sniper | 999940 | `tpda-mkt-bubble` | `tpda-mkt-panel` |
 | War Manager | 999945 | `tpda-war-mgr-bubble` | `tpda-war-mgr-panel` |
@@ -384,6 +388,7 @@ Each script prefixes its keys with `SCRIPT_KEY`:
 | Bounty Filter | `tpda_bounty_filter_v1` | `_bubble_pos`, `_panel_pos`, `_filters`, `_bounty_cache`, `_status_cache` |
 | Market Sniper | `tpda_market_sniper_v1` | `_api_key`, `_bubble_pos`, `_panel_pos`, `_watchlist`, `_prices`, `_dismissed`, `_filters` |
 | Traveler Utility | `tpda_traveler_v1` | `_api_key`, `_bubble_pos`, `_panel_pos` |
+| Stock Trader | `tpda_stock_trader_v1` | `_bubble_pos`, `_panel_pos`, `_market`, `_detail`, `_user_stocks`, `_history`, `_watchlist`, `_settings` |
 
 ### Debug Log Pattern
 
@@ -779,6 +784,70 @@ Every script has:
 - 2 calls for faction rosters + N profile calls per scan (650ms gaps)
 - Polling only runs when panel is open, configurable 30s–10min intervals
 
+### Stock Trader (`torn-stock-trader-bubble.user.js`)
+
+**Purpose:** Stock market analyzer — fetches real-time stock data from Torn API v2, tracks price history, computes technical indicators (SMA, EMA, RSI), generates buy/sell signals, and tracks user portfolio with P&L.
+
+**Design:**
+- **56 px bubble** with gold gradient, labeled "$"
+- **400 px panel** — tabbed UI (Overview, Holdings, Settings), stock list with sparklines, detail view
+- **z-index base 999930** — lowest of all scripts
+- **Three V2 API endpoints:** `/v2/torn/stocks`, `/v2/torn/{id}/stocks`, `/v2/user/stocks`
+
+**Key constants:**
+- `MARKET_CACHE_TTL = 5 * 60 * 1000` — 5-minute market data cache
+- `DETAIL_CACHE_TTL = 15 * 60 * 1000` — 15-minute per-stock detail cache
+- `USER_CACHE_TTL = 5 * 60 * 1000` — 5-minute user holdings cache
+- `HISTORY_SNAPSHOT_INTERVAL = 60 * 60 * 1000` — hourly local history snapshots
+- `HISTORY_MAX_AGE = 7 * 24 * 60 * 60 * 1000` — 7 days local history retention
+- `API_DELAY_MS = 350` — gap between per-stock detail calls
+- `POLL_MS = 5 * 60 * 1000` — 5-minute auto-poll when panel open
+- `STOCK_BENEFITS` — Cash-paying stock benefit rules (TCT, GRN, IOU, TMI, TSB, CNC)
+- `DEFAULT_WATCHLIST` — 15 popular benefit/trading stocks
+
+**Key functions:**
+- `fetchAllStocks()` — Fetches `/v2/torn/stocks` — all stocks with price, cap, investors, bonus info
+- `fetchStockDetail(stockId)` — Fetches `/v2/torn/{stockId}/stocks` — chart history + performance periods
+- `fetchWatchlistDetails()` — Fetches detailed data for all watchlist stocks (sequential with 350ms gaps)
+- `fetchUserStocks()` — Fetches `/v2/user/stocks` — user's holdings with transactions and bonus progress
+- `takeHistorySnapshot(stocks)` — Records hourly price snapshots to localStorage (max 168 = 7 days)
+- `computeSMA(prices, period)` — Simple Moving Average
+- `computeEMA(prices, period)` — Exponential Moving Average
+- `computeRSI(prices, period)` — Relative Strength Index
+- `computeStockSignal(acronym)` — Multi-factor signal engine: performance trends + SMA crossover + RSI + support/resistance + benefit ROI
+- `computeAllSignals()` — Runs signal computation for all market stocks
+- `getFilteredStocks()` — Applies filter + sort settings to stock list
+- `sparkline(prices, width, height)` — Generates inline SVG sparkline chart
+- `renderOverviewTab()` — Stock list with price, change%, sparkline, signal badge, filters
+- `renderDetailTab()` — Full stock detail: chart, performance table, signal analysis, indicators, holdings, benefit ROI
+- `renderHoldingsTab()` — Portfolio summary + per-stock holdings with P&L
+- `renderSettingsTab()` — Watchlist management, notification settings, data controls
+- `checkNotifications()` — Fires browser alerts for watchlisted stocks with BUY/SELL signals
+
+**Signal algorithm (multi-factor scoring):**
+1. **API performance data** — scores ±0.5 to ±2 based on hourly/daily/weekly/monthly change percentages and day range position
+2. **SMA crossover** — SMA-6 vs SMA-12 from API chart history (±1.5 for golden/death cross)
+3. **RSI** — RSI-14: oversold (<30) = +2, overbought (>70) = -2
+4. **EMA deviation** — Price vs EMA-12: >5% above = stretched, >5% below = undervalued
+5. **Local history** — Own collected SMA-3 vs SMA-6 (±0.5)
+6. **Benefit ROI** — Annual ROI from cash-paying stock benefits (+0.5 to +1)
+7. **Signal mapping:** score ≥4 = STRONG BUY, ≥2 = BUY, ≥0.5 = LEAN BUY, ≤-0.5 = LEAN SELL, ≤-2 = SELL, ≤-4 = STRONG SELL
+
+**Data flow:**
+1. API key resolved (PDA > shared manual > intercepted)
+2. On panel open: load cached data, auto-fetch if stale (5-min TTL)
+3. `fetchAllStocks()` → all stocks with current prices → take history snapshot → compute signals
+4. `fetchUserStocks()` → user holdings with transactions
+5. On demand: `fetchWatchlistDetails()` → per-stock chart history + performance data
+6. `computeAllSignals()` generates signal/strength/reasons for each stock
+7. `renderPanel()` displays tabbed UI with stock list, detail view, or holdings
+
+**API usage:**
+- 1 call for all stocks + 1 for user holdings + 1 per watchlist stock detail (~17 total)
+- 350ms gap between detail calls
+- Auto-poll every 5 minutes when panel is open
+- Caching prevents redundant calls (5-15 min TTL depending on endpoint)
+
 ---
 
 ## Coding Conventions
@@ -1013,6 +1082,9 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
 | `user` (by ID) | `profile` | Bounty Filter, War Bubble, War Manager | Target state, timers, stat estimation |
 | `user` (by ID) | `profile,personalstats,criminalrecord` | War Bubble, War Manager | Full profile for stat estimation |
 | `user` | `travel,profile` | Traveler Utility | Travel status, destination, time remaining |
+| `torn` (v2) | `stocks` (via `/v2/torn/stocks`) | Stock Trader | All stocks: price, cap, shares, investors, bonus |
+| `torn` (v2) | `stocks` (via `/v2/torn/{id}/stocks`) | Stock Trader | Per-stock chart history + performance periods |
+| `user` (v2) | `stocks` (via `/v2/user/stocks`) | Stock Trader | User holdings: shares, transactions, bonus progress |
 
 > **Note:** The Strip Poker Advisor makes no API calls — it is entirely client-side poker math.
 
@@ -1026,6 +1098,7 @@ V2: https://api.torn.com/v2/{section}/{id}?selections={selections}&key={apiKey}
   - Plushie Prices: 13 calls per refresh, 250ms apart (~52/min), cached for 10 minutes
   - Market Sniper: 16 calls per scan, 300ms apart (~32/min), cached for 5 minutes
   - Traveler Utility: 1 call per 30s (~2/min), only when panel is open
+  - Stock Trader: ~17 calls per refresh (1 overview + 1 user + 15 details), 350ms gaps, cached 5-15 min
 
 ### Key API Response Fields (Faction Basic)
 

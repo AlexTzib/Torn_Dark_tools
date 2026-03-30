@@ -30,6 +30,7 @@ SCRIPTS = {
     'torn-bounty-filter.src.js':       'torn-bounty-filter-bubble.user.js',
     'torn-market-sniper.src.js':       'torn-market-sniper-bubble.user.js',
     'torn-traveler-utility.src.js':    'torn-traveler-utility-bubble.user.js',
+    'torn-stock-trader.src.js':        'torn-stock-trader-bubble.user.js',
 }
 
 

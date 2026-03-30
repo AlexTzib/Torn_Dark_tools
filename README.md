@@ -92,6 +92,19 @@ A quick-travel navigation tool. Shows your current travel status and provides on
 - **Arrival tips** — contextual tips for what to do when you arrive at your destination
 - **Auto-polling** — refreshes travel status every 30 seconds while the panel is open
 
+### Stock Trader (Gold "$" bubble)
+
+A stock market analyzer that fetches real-time stock data, tracks price history, and generates buy/sell signals based on technical analysis.
+
+- **Stock overview** — all Torn stocks with current price, daily change %, mini sparkline charts, and signal badges
+- **Buy/sell signals** — computed from SMA crossover, RSI, momentum trends, support/resistance zones, and benefit ROI
+- **7 signal levels** — STRONG BUY, BUY, LEAN BUY, HOLD, LEAN SELL, SELL, STRONG SELL
+- **Stock detail view** — performance breakdown (1h/1d/1w/1m/1y), chart history, technical indicators (SMA-6, SMA-12, EMA-12, RSI-14)
+- **Portfolio tracking** — your holdings with per-stock P&L, bonus progress, total portfolio value
+- **Benefit ROI calculator** — for cash-paying stocks: investment cost, annual ROI, payback period
+- **Watchlist** — track specific stocks with optional browser notifications on signals
+- **Price history** — hourly snapshots stored locally for up to 7 days
+
 ---
 
 ## Scripts
@@ -106,6 +119,7 @@ A quick-travel navigation tool. Shows your current travel status and provides on
 | [**Bounty Filter**](torn-bounty-filter-bubble.md) | Orange "BTY" | Filter bounties by state (hospital/jail/abroad/in Torn), hospital timers, level, reward | `torn/?selections=bounties` + `user/{id}?selections=profile` |
 | [**Market Sniper**](torn-market-sniper-bubble.md) | Green "MKT" | Market profit finder — scans watchlist items for underpriced deals, shows profit/ROI | `/v2/market/{id}/itemmarket` + TornW3B bazaar (16 calls per scan) |
 | [**Traveler Utility**](torn-traveler-utility.md) | Blue airplane | Quick-travel navigation, travel status, abroad shop links, flight ETA | `user/?selections=travel,profile` (1 call per 30s) |
+| [**Stock Trader**](torn-stock-trader.md) | Gold "$" | Stock market analyzer — price tracking, SMA/EMA/RSI signals, buy/sell recommendations, portfolio P&L | `/v2/torn/stocks` + `/v2/torn/{id}/stocks` + `/v2/user/stocks` (~17 calls per refresh) |
 
 ---
 
@@ -152,15 +166,15 @@ All scripts that need an API key use a three-tier priority system:
 
 ## Torn Policy Compliance Summary
 
-| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker | War Manager | Bounty Filter | Market Sniper | Traveler Utility |
-|---|---|---|---|---|---|---|---|---|
-| No game-action automation | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| One-click-one-action | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted |
-| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all | Only `api.torn.com` | Only `api.torn.com` | `api.torn.com` + `weav3r.dev` (item IDs only) | Only `api.torn.com` |
-| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) | 2 faction + N profile calls, 650ms gaps | 1 + up to 30 calls, 350ms gaps, 1-2 min cache | 16 calls per scan, 300ms apart, 5-min cache | 1 call per 30s (~2/min) |
-| No request modification | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
-| Read-only display | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| Requirement | AI Advisor | Plushie Prices | War Bubble | Strip Poker | War Manager | Bounty Filter | Market Sniper | Traveler Utility | Stock Trader |
+|---|---|---|---|---|---|---|---|---|---|
+| No game-action automation | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| One-click-one-action | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| No API key extraction/abuse | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | PDA key auto-injected; manual fallback; own key only | No API key needed | PDA key auto-injected; manual fallback; own key only | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted | Own key stored locally; PDA/manual/intercepted |
+| No external server comms | Only `api.torn.com` | Only `api.torn.com` | Only `api.torn.com` | None at all | Only `api.torn.com` | Only `api.torn.com` | `api.torn.com` + `weav3r.dev` (item IDs only) | Only `api.torn.com` | Only `api.torn.com` |
+| API rate limits respected | On-demand only | 13 calls per refresh, 250ms apart, 10-min cache | Configurable 30s–10min (well under 100/min) | N/A (no API calls) | 2 faction + N profile calls, 650ms gaps | 1 + up to 30 calls, 350ms gaps, 1-2 min cache | 16 calls per scan, 300ms apart, 5-min cache | 1 call per 30s (~2/min) | ~17 calls per refresh, 350ms gaps, 5-15 min cache |
+| No request modification | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
+| Read-only display | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant | Compliant |
 
 For a detailed compliance breakdown, see each script's individual documentation in the `docs/` folder.
 
@@ -275,7 +289,8 @@ Torn_Dark_tools/
 │   ├── torn-strip-poker-bubble.src.js     ← Strip Poker Advisor source
 │   ├── torn-bounty-filter-bubble.src.js   ← Bounty Filter source
 │   ├── torn-market-sniper.src.js          ← Market Sniper source
-│   └── torn-traveler-utility.src.js       ← Traveler Utility source
+│   ├── torn-traveler-utility.src.js       ← Traveler Utility source
+│   └── torn-stock-trader.src.js           ← Stock Trader source
 ├── torn-assistant.user.js                 ← AI Advisor bubble (built output)
 ├── torn-assistant.md                      ← AI Advisor documentation
 ├── torn-pda-deal-finder-bubble.user.js    ← Plushie Prices bubble (built output)
@@ -289,7 +304,9 @@ Torn_Dark_tools/
 ├── torn-market-sniper-bubble.user.js      ← Market Sniper bubble (built output)
 ├── torn-market-sniper-bubble.md           ← Market Sniper documentation
 ├── torn-traveler-utility-bubble.user.js   ← Traveler Utility bubble (built output)
-└── torn-traveler-utility.md               ← Traveler Utility documentation
+├── torn-traveler-utility.md               ← Traveler Utility documentation
+├── torn-stock-trader-bubble.user.js       ← Stock Trader bubble (built output)
+└── torn-stock-trader.md                   ← Stock Trader documentation
 ```
 
 ---
