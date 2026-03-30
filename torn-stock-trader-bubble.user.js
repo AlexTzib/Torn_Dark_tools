@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.2.0
+// @version      1.3.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1747,11 +1747,11 @@
     if (detail && detail.chart && detail.chart.performance) {
       const perf = detail.chart.performance;
 
-      /* Short-term momentum (last hour) */
+      /* Short-term momentum (last hour) — low weight, noisy data */
       if (perf.last_hour) {
         const pct = perf.last_hour.change_percentage;
-        if (pct > 2) { score += 1; reasons.push(`Hour: +${pct.toFixed(1)}% (bullish momentum)`); }
-        else if (pct < -2) { score -= 1; reasons.push(`Hour: ${pct.toFixed(1)}% (bearish momentum)`); }
+        if (pct > 2) { score += 0.5; reasons.push(`Hour: +${pct.toFixed(1)}% (bullish momentum)`); }
+        else if (pct < -2) { score -= 0.5; reasons.push(`Hour: ${pct.toFixed(1)}% (bearish momentum)`); }
       }
 
       /* Day trend */
@@ -1781,12 +1781,12 @@
         else if (pct < -2) { score -= 1; reasons.push(`Month: ${pct.toFixed(1)}% (downtrend)`); }
       }
 
-      /* Support/resistance from day range */
+      /* Support/resistance from day range — symmetric weight */
       if (perf.last_day && perf.last_day.high && perf.last_day.low) {
         const range = perf.last_day.high - perf.last_day.low;
         const position = range > 0 ? (price - perf.last_day.low) / range : 0.5;
         if (position < 0.2) { score += 1; reasons.push('Near day low (support zone)'); }
-        else if (position > 0.8) { score -= 0.5; reasons.push('Near day high (resistance zone)'); }
+        else if (position > 0.8) { score -= 1; reasons.push('Near day high (resistance zone)'); }
       }
     }
 
@@ -1796,8 +1796,8 @@
       const sma6 = computeSMA(histPrices, 6);
       const sma12 = computeSMA(histPrices, 12);
       if (sma6 !== null && sma12 !== null) {
-        if (sma6 > sma12 * 1.01) { score += 1.5; reasons.push('SMA6 > SMA12 (golden cross)'); }
-        else if (sma6 < sma12 * 0.99) { score -= 1.5; reasons.push('SMA6 < SMA12 (death cross)'); }
+        if (sma6 > sma12 * 1.01) { score += 1.5; reasons.push('SMA6 > SMA12 (bullish crossover)'); }
+        else if (sma6 < sma12 * 0.99) { score -= 1.5; reasons.push('SMA6 < SMA12 (bearish crossover)'); }
       }
 
       /* RSI */
@@ -1836,6 +1836,7 @@
       const roi = (annualReturn / investmentCost) * 100;
       if (roi > S.roiGreatPct) { score += 1; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr > ${S.roiGreatPct}% (strong passive income)`); }
       else if (roi > S.roiGoodPct) { score += 0.5; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr > ${S.roiGoodPct}%`); }
+      else if (roi < 1) { score -= 0.5; reasons.push(`Benefit ROI ${roi.toFixed(1)}%/yr < 1% (overpriced for benefit)`); }
     }
 
     /* ── Determine signal ─────────────────────────────────── */

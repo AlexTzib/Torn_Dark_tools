@@ -84,6 +84,7 @@ This is the main screen. Each row shows one Torn stock:
 |---|---|
 | **Watchlist** | Only show stocks in your watchlist (hide everything else) |
 | **Owned** | Only show stocks you currently own shares of |
+| **Not Owned** | Only show stocks you do NOT own (mutually exclusive with Owned) |
 | **Signals Only** | Hide stocks with a HOLD signal (only show stocks with buy or sell signals) |
 
 ### Sort Dropdown
@@ -246,6 +247,25 @@ Notifications are deduplicated — you won't get spammed with the same alert. Ea
 | **Fetch Watchlist Details** | Downloads detailed chart/performance data for every stock in your watchlist (needed for full signal analysis) |
 | **Clear History** | Erases all locally stored price snapshots. The script will start collecting fresh data from scratch. |
 
+### Signal Parameters
+
+Advanced users can fine-tune the algorithm's thresholds. These settings control how the numeric score maps to signal labels, and how the RSI and ROI indicators are evaluated:
+
+| Parameter | Default | Description |
+|---|---|---|
+| **Strong Buy Score** | 4 | Score at or above this → STRONG BUY |
+| **Buy Score** | 2 | Score at or above this → BUY |
+| **Lean Buy Score** | 0.5 | Score at or above this → LEAN BUY |
+| **Lean Sell Score** | -0.5 | Score at or below this → LEAN SELL |
+| **Sell Score** | -2 | Score at or below this → SELL |
+| **Strong Sell Score** | -4 | Score at or below this → STRONG SELL |
+| **RSI Oversold** | 30 | RSI below this → oversold (+2 points) |
+| **RSI Overbought** | 70 | RSI above this → overbought (-2 points) |
+| **ROI Good %** | 2 | Benefit ROI above this → +0.5 points |
+| **ROI Great %** | 5 | Benefit ROI above this → +1 point |
+
+Changes take effect immediately on the current signal calculations. Values are saved to localStorage.
+
 ---
 
 ## Understanding the Signals
@@ -296,7 +316,7 @@ The script looks at how the stock price has changed over different time periods.
 
 | Period | Bullish Condition | Points | Bearish Condition | Points |
 |---|---|---|---|---|
-| **1 Hour** | Price up > +2% | +1 | Price down > -2% | -1 |
+| **1 Hour** | Price up > +2% | +0.5 | Price down > -2% | -0.5 |
 | **1 Day** | Up > +3% | +1 | Down > -3% | -1 |
 | | Up > +0.5% | +0.5 | Down > -0.5% | -0.5 |
 | **1 Week** | Up > +5% | +1.5 | Down > -5% | -1.5 |
@@ -313,21 +333,21 @@ The script checks where the current price sits within today's high-low range:
 | Position in Range | What It Means | Points |
 |---|---|---|
 | **Bottom 20%** (near day low) | Price is near a "support zone" — it may bounce back up | +1 |
-| **Top 20%** (near day high) | Price is near a "resistance zone" — it may have trouble going higher | -0.5 |
+| **Top 20%** (near day high) | Price is near a "resistance zone" — it may have trouble going higher | -1 |
 
 ### Category 2: Technical Indicators (from API chart history)
 
 These require the detailed chart data (fetched per-stock from `/v2/torn/{id}/stocks`).
 
-#### SMA Crossover (Golden Cross / Death Cross)
+#### SMA Crossover (Bullish / Bearish Crossover)
 
 - **SMA-6** = average of the last 6 price points (short-term direction)
 - **SMA-12** = average of the last 12 price points (medium-term direction)
 
 | Condition | Name | Points | Meaning |
 |---|---|---|---|
-| SMA-6 is >1% above SMA-12 | **Golden Cross** | +1.5 | The short-term trend has crossed above the longer trend — momentum is shifting upward |
-| SMA-6 is >1% below SMA-12 | **Death Cross** | -1.5 | The short-term trend has crossed below the longer trend — momentum is shifting downward |
+| SMA-6 is >1% above SMA-12 | **Bullish Crossover** | +1.5 | The short-term trend has crossed above the longer trend — momentum is shifting upward |
+| SMA-6 is >1% below SMA-12 | **Bearish Crossover** | -1.5 | The short-term trend has crossed below the longer trend — momentum is shifting downward |
 
 #### RSI (Relative Strength Index)
 
@@ -369,6 +389,7 @@ Only applies to: TCT, GRN, IOU, TMI, TSB, CNC — the stocks that pay regular ca
 |---|---|---|
 | Annual ROI > 5% | +1 | The benefit payout relative to the investment cost is very attractive |
 | Annual ROI > 2% | +0.5 | Decent passive income return |
+| Annual ROI < 1% | -0.5 | Overpriced for benefit — the stock costs a lot relative to its payout |
 
 The ROI is calculated as: `(monthly payout / frequency days x 365) / (required shares x current price) x 100`
 
@@ -378,7 +399,7 @@ Imagine stock **GRN** with these conditions:
 - Last day: +3.5% → **+1** (strong up)
 - Last week: +2% → **+0.5** (uptrend)
 - Last month: +8% → **+1** (uptrend)
-- SMA-6 > SMA-12 → **+1.5** (golden cross)
+- SMA-6 > SMA-12 → **+1.5** (bullish crossover)
 - RSI at 45 → **0** (neutral)
 - Benefit ROI at 3.2% → **+0.5** (decent)
 
@@ -399,7 +420,7 @@ Takes the last N prices and averages them. Smooths out noise to show the overall
 - **SMA-6** reacts quickly — it shows what the stock has been doing very recently
 - **SMA-12** reacts more slowly — it shows the broader trend
 
-When SMA-6 crosses above SMA-12, it's called a **golden cross** (bullish). When SMA-6 crosses below SMA-12, it's called a **death cross** (bearish). These are widely-used signals in technical analysis.
+When SMA-6 crosses above SMA-12, it's called a **bullish crossover** (upward momentum). When SMA-6 crosses below SMA-12, it's called a **bearish crossover** (downward momentum). Note: the terms "golden cross" and "death cross" are traditionally used for longer timeframes like the 50-day and 200-day moving averages; our shorter SMA-6/SMA-12 periods are better described as simple crossover signals.
 
 ### EMA (Exponential Moving Average)
 
