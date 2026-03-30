@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.6.0
+// @version      1.7.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -813,7 +813,7 @@
         pnlNote = `<div style="font-size:10px;color:${pnl >= 0 ? '#4caf50' : '#f44336'};margin-top:1px;">P&L: ${formatMoney(pnl)} (${formatPct(pnlPct)})</div>`;
       }
 
-      html += `<div class="tpda-stock-row" data-stock="${escapeHtml(stock.acronym)}">
+      html += `<div class="tpda-stock-row" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;">
             ${stockLogo(stock.id, 22, stock.acronym)}
@@ -827,11 +827,15 @@
             ${history.length > 2 ? sparkline(history.slice(-30), 60, 18) : ''}
           </div>
         </div>
-        <div style="text-align:right;">
-          <span class="tpda-stock-badge" style="background:${getSignalColor(label)}22;color:${getSignalColor(label)};">
-            ${getSignalIcon(label)} ${escapeHtml(label)}
-          </span>
-          ${pnlNote}
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="text-align:right;">
+            <span class="tpda-stock-badge" style="background:${getSignalColor(label)}22;color:${getSignalColor(label)};">
+              ${getSignalIcon(label)} ${escapeHtml(label)}
+            </span>
+            ${pnlNote}
+          </div>
+          <span class="tpda-stock-info-btn" data-stock="${escapeHtml(stock.acronym)}" title="Signal details"
+            style="cursor:pointer;font-size:14px;color:#555;padding:2px 4px;">\u24D8</span>
         </div>
       </div>`;
     }
@@ -1034,16 +1038,20 @@
         totalPnl += pnl;
       }
 
-      html += `<div class="tpda-stock-card" style="cursor:pointer;" data-stock="${escapeHtml(stock.acronym)}">
+      html += `<div class="tpda-stock-card" style="cursor:pointer;" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="display:flex;align-items:center;gap:6px;">
             ${stockLogo(stock.id, 22, stock.acronym)}
             <span style="font-weight:700;">${escapeHtml(stock.acronym)}</span>
             <span style="font-size:11px;color:#888;">${escapeHtml(stock.name || '')}</span>
           </div>
-          <span class="tpda-stock-badge" style="background:${getSignalColor(sig.signal)}22;color:${getSignalColor(sig.signal)};">
-            ${getSignalIcon(sig.signal)} ${escapeHtml(sig.signal)}
-          </span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="tpda-stock-badge" style="background:${getSignalColor(sig.signal)}22;color:${getSignalColor(sig.signal)};">
+              ${getSignalIcon(sig.signal)} ${escapeHtml(sig.signal)}
+            </span>
+            <span class="tpda-stock-info-btn" data-stock="${escapeHtml(stock.acronym)}" title="Signal details"
+              style="cursor:pointer;font-size:14px;color:#555;padding:2px 4px;">\u24D8</span>
+          </div>
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;">
           <span>${formatNumber(us.shares)} shares @ ${formatPrice(stock.market.price)}</span>
@@ -1190,30 +1198,39 @@
       return;
     }
 
-    /* Stock row click → detail */
-    const stockRow = e.target.closest('[data-stock]');
-    if (stockRow) {
-      const bdy = getPanelEl()?.querySelector('.tpda-stock-body');
-      STATE.savedScrollTop = bdy ? bdy.scrollTop : 0;
-      STATE.previousTab = STATE.activeTab;
-      STATE.detailStock = stockRow.dataset.stock;
-      STATE.activeTab = 'detail';
-      renderPanel();
-      /* Fetch detail if not cached */
-      const detail = STATE.stockDetails[STATE.detailStock];
-      if (!detail || Date.now() - detail.fetchedAt > DETAIL_CACHE_TTL) {
-        const stock = STATE.marketStocks.find(s => s.acronym === STATE.detailStock);
-        if (stock) {
-          fetchStockDetail(stock.id).then(d => {
-            if (d) {
-              STATE.stockDetails[STATE.detailStock] = { ...d, fetchedAt: Date.now() };
-              saveDetailCache();
-              computeAllSignals();
-              renderPanel();
-            }
-          });
+    /* Info button → detail view */
+    const infoBtn = e.target.closest('.tpda-stock-info-btn');
+    if (infoBtn) {
+      const acr = infoBtn.dataset.stock;
+      if (acr) {
+        const bdy = getPanelEl()?.querySelector('.tpda-stock-body');
+        STATE.savedScrollTop = bdy ? bdy.scrollTop : 0;
+        STATE.previousTab = STATE.activeTab;
+        STATE.detailStock = acr;
+        STATE.activeTab = 'detail';
+        renderPanel();
+        const detail = STATE.stockDetails[acr];
+        if (!detail || Date.now() - detail.fetchedAt > DETAIL_CACHE_TTL) {
+          const stock = STATE.marketStocks.find(s => s.acronym === acr);
+          if (stock) {
+            fetchStockDetail(stock.id).then(d => {
+              if (d) {
+                STATE.stockDetails[acr] = { ...d, fetchedAt: Date.now() };
+                saveDetailCache();
+                computeAllSignals();
+                renderPanel();
+              }
+            });
+          }
         }
       }
+      return;
+    }
+
+    /* Stock row click → open in Torn stock market */
+    const stockRow = e.target.closest('[data-stock]');
+    if (stockRow) {
+      window.location.href = 'https://www.torn.com/page.php?sid=stocks';
       return;
     }
 
