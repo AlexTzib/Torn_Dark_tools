@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.4.0
+// @version      1.5.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -473,16 +473,16 @@
   function getSignalColor(signal) {
     if (signal.includes('STRONG BUY')) return '#00e676';
     if (signal.includes('BUY')) return '#4caf50';
-    if (signal.includes('STRONG SELL')) return '#ff1744';
-    if (signal.includes('SELL')) return '#f44336';
+    if (signal.includes('STRONG SELL') || signal.includes('STRONG AVOID')) return '#ff1744';
+    if (signal.includes('SELL') || signal.includes('AVOID')) return '#f44336';
     return '#ffd740';
   }
 
   function getSignalIcon(signal) {
     if (signal.includes('STRONG BUY')) return '\u25B2\u25B2';
     if (signal.includes('BUY')) return '\u25B2';
-    if (signal.includes('STRONG SELL')) return '\u25BC\u25BC';
-    if (signal.includes('SELL')) return '\u25BC';
+    if (signal.includes('STRONG SELL') || signal.includes('STRONG AVOID')) return '\u25BC\u25BC';
+    if (signal.includes('SELL') || signal.includes('AVOID')) return '\u25BC';
     return '\u25CF';
   }
 
@@ -542,6 +542,14 @@
 
   function getUserHolding(stockId) {
     return STATE.userStocks.find(s => s.id === stockId);
+  }
+
+  function contextSignal(signal, owned) {
+    if (owned) return signal;
+    if (signal === 'STRONG SELL') return 'STRONG AVOID';
+    if (signal === 'SELL') return 'AVOID';
+    if (signal === 'LEAN SELL') return 'LEAN AVOID';
+    return signal;
   }
 
   function getFilteredStocks() {
@@ -788,6 +796,15 @@
       const history = (detail?.chart?.history || []).map(h => h.price);
       const isWatchlisted = STATE.watchlist.includes(stock.acronym);
       const holding = getUserHolding(stock.id);
+      const label = contextSignal(sig.signal, !!holding);
+
+      let pnlNote = '';
+      if (holding && sig.strength < 0 && holding.transactions && holding.transactions.length) {
+        const lastTx = holding.transactions[holding.transactions.length - 1];
+        const pnl = (stock.market.price - lastTx.price) * holding.shares;
+        const pnlPct = lastTx.price > 0 ? ((stock.market.price - lastTx.price) / lastTx.price) * 100 : 0;
+        pnlNote = `<div style="font-size:10px;color:${pnl >= 0 ? '#4caf50' : '#f44336'};margin-top:1px;">P&L: ${formatMoney(pnl)} (${formatPct(pnlPct)})</div>`;
+      }
 
       html += `<div class="tpda-stock-row" data-stock="${escapeHtml(stock.acronym)}">
         <div style="flex:1;min-width:0;">
@@ -804,9 +821,10 @@
           </div>
         </div>
         <div style="text-align:right;">
-          <span class="tpda-stock-badge" style="background:${getSignalColor(sig.signal)}22;color:${getSignalColor(sig.signal)};">
-            ${getSignalIcon(sig.signal)} ${escapeHtml(sig.signal)}
+          <span class="tpda-stock-badge" style="background:${getSignalColor(label)}22;color:${getSignalColor(label)};">
+            ${getSignalIcon(label)} ${escapeHtml(label)}
           </span>
+          ${pnlNote}
         </div>
       </div>`;
     }
@@ -829,6 +847,7 @@
     const holding = getUserHolding(stock.id);
     const benefit = STOCK_BENEFITS[acronym];
     const isWatchlisted = STATE.watchlist.includes(acronym);
+    const label = contextSignal(sig.signal, !!holding);
 
     let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <button class="tpda-stock-btn tpda-stock-back" style="background:#2a2e3a;color:#fff;">\u2190 Back</button>
@@ -849,8 +868,8 @@
           <div style="font-size:12px;color:#888;">Cap: ${formatLargeNumber(stock.market.cap)} \u2022 Investors: ${formatNumber(stock.market.investors)}</div>
         </div>
         <div style="text-align:right;">
-          <div class="tpda-stock-badge" style="background:${getSignalColor(sig.signal)}22;color:${getSignalColor(sig.signal)};font-size:14px;padding:4px 10px;">
-            ${getSignalIcon(sig.signal)} ${escapeHtml(sig.signal)}
+          <div class="tpda-stock-badge" style="background:${getSignalColor(label)}22;color:${getSignalColor(label)};font-size:14px;padding:4px 10px;">
+            ${getSignalIcon(label)} ${escapeHtml(label)}
           </div>
           <div style="font-size:11px;color:#888;margin-top:4px;">Score: ${sig.score?.toFixed(1) || '0'}</div>
         </div>
@@ -899,6 +918,16 @@
         <div style="font-size:12px;font-weight:600;margin-bottom:6px;">Signal Analysis</div>`;
       for (const reason of sig.reasons) {
         html += `<div style="font-size:11px;color:#bbb;padding:2px 0;">\u2022 ${escapeHtml(reason)}</div>`;
+      }
+      if (holding && sig.strength < 0 && holding.transactions && holding.transactions.length) {
+        const lastTx = holding.transactions[holding.transactions.length - 1];
+        const pnlPct = lastTx.price > 0 ? ((stock.market.price - lastTx.price) / lastTx.price) * 100 : 0;
+        if (pnlPct < 0) {
+          html += `<div style="font-size:11px;color:#ffd740;padding:4px 0 0;border-top:1px solid #2f3340;margin-top:4px;">\u26A0 You own this stock at ${formatPct(pnlPct)} P&L. Selling now locks in losses.</div>`;
+        }
+      }
+      if (!holding && sig.strength < 0) {
+        html += `<div style="font-size:11px;color:#888;padding:4px 0 0;border-top:1px solid #2f3340;margin-top:4px;">You don't own this stock \u2014 signal means "avoid buying."</div>`;
       }
       html += `</div>`;
     }
@@ -1017,6 +1046,7 @@
           <span style="color:#888;">P&L</span>
           <span style="color:${pnl >= 0 ? '#4caf50' : '#f44336'};">${formatMoney(pnl)} (${formatPct(pnlPct)})</span>
         </div>
+        ${pnl < 0 && sig.strength < 0 ? `<div style="font-size:10px;color:#ffd740;margin-top:3px;">\u26A0 Bearish trend \u2014 consider holding for recovery or cutting losses</div>` : ''}
         ${us.bonus ? `<div style="font-size:11px;color:#888;margin-top:2px;">Bonus: ${us.bonus.available ? '\u2705 Ready' : us.bonus.progress + '/' + us.bonus.frequency + ' days'}</div>` : ''}
       </div>`;
     }
@@ -1297,13 +1327,16 @@
     for (const acr of STATE.watchlist) {
       const sig = STATE.signals[acr];
       if (!sig) continue;
+      const stock = STATE.marketStocks.find(s => s.acronym === acr);
+      const owned = stock ? !!getUserHolding(stock.id) : false;
+      const label = contextSignal(sig.signal, owned);
       if (STATE.settings.notifyOnBuy && sig.signal.includes('BUY')) {
         tpdaNotify('stock_buy_' + acr, 'Stock BUY Signal: ' + acr,
-          sig.signal + ' — ' + (sig.reasons[0] || ''), 30 * 60 * 1000);
+          label + ' \u2014 ' + (sig.reasons[0] || ''), 30 * 60 * 1000);
       }
       if (STATE.settings.notifyOnSell && sig.signal.includes('SELL')) {
-        tpdaNotify('stock_sell_' + acr, 'Stock SELL Signal: ' + acr,
-          sig.signal + ' — ' + (sig.reasons[0] || ''), 30 * 60 * 1000);
+        tpdaNotify('stock_sell_' + acr, 'Stock ' + (owned ? 'SELL' : 'AVOID') + ' Signal: ' + acr,
+          label + ' \u2014 ' + (sig.reasons[0] || ''), 30 * 60 * 1000);
       }
     }
   }
