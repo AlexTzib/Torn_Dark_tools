@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.9.0
+// @version      1.9.1
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -1607,6 +1607,76 @@
     return data.stocks || data;
   }
 
+  async function fullRefresh() {
+    if (STATE.scanning) return;
+    STATE.scanning = true;
+    STATE.freshlyLoaded = {};
+    STATE.scanProgress = 0;
+    STATE.scanCurrentAcr = '';
+    addLog('Full refresh started');
+
+    /* Step 1: fetch market overview + user holdings in parallel */
+    STATE.scanCurrentAcr = 'market data';
+    renderPanel();
+    const url1 = `https://api.torn.com/v2/torn/stocks?key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
+    const url2 = `https://api.torn.com/v2/user/stocks?key=${encodeURIComponent(STATE.apiKey)}&_tpda=1`;
+    const [marketData, userData] = await Promise.all([tornApiGet(url1), tornApiGet(url2)]);
+    if (marketData && !marketData.error) {
+      const stocks = marketData.stocks || [];
+      if (stocks.length) {
+        STATE.marketStocks = stocks;
+        STATE.marketFetchedAt = Date.now();
+        setStorage(MARKET_KEY, { stocks, fetchedAt: STATE.marketFetchedAt });
+        takeHistorySnapshot(stocks);
+        addLog('Fetched ' + stocks.length + ' stocks');
+      }
+    } else {
+      addLog('Market fetch failed: ' + (marketData?.error?.error || 'no data'));
+    }
+    if (userData && !userData.error) {
+      STATE.userStocks = userData.stocks || [];
+      STATE.userFetchedAt = Date.now();
+      setStorage(USER_STOCKS_KEY, { stocks: STATE.userStocks, fetchedAt: STATE.userFetchedAt });
+      addLog('User owns ' + STATE.userStocks.length + ' stock(s)');
+    }
+
+    /* Step 2: fetch detail data for every watchlist stock */
+    const stocksToFetch = [];
+    for (const acr of STATE.watchlist) {
+      const stock = STATE.marketStocks.find(s => s.acronym === acr);
+      if (stock) stocksToFetch.push(stock);
+    }
+    STATE.scanTotal = stocksToFetch.length;
+    STATE.scanProgress = 0;
+    addLog('Fetching details for ' + stocksToFetch.length + ' watchlist stocks...');
+    renderPanel();
+
+    for (const stock of stocksToFetch) {
+      STATE.scanCurrentAcr = stock.acronym;
+      renderPanel();
+      const detail = await fetchStockDetail(stock.id);
+      STATE.scanProgress++;
+      if (detail) {
+        STATE.stockDetails[stock.acronym] = { ...detail, fetchedAt: Date.now() };
+        STATE.freshlyLoaded[stock.acronym] = Date.now();
+        addLog('Detail fetched: ' + stock.acronym);
+      }
+      if (STATE.scanProgress < STATE.scanTotal) await sleep(API_DELAY_MS);
+      renderPanel();
+    }
+    saveDetailCache();
+
+    /* Step 3: recompute all signals with fresh data */
+    STATE.scanning = false;
+    STATE.scanCurrentAcr = '';
+    computeAllSignals();
+    checkNotifications();
+    addLog('Full refresh complete \u2014 signals updated');
+    renderPanel();
+    setTimeout(() => { STATE.freshlyLoaded = {}; renderPanel(); }, 3000);
+  }
+
+
   async function fetchWatchlistDetails() {
     if (!STATE.apiKey || STATE.scanning) return;
     STATE.scanning = true;
@@ -1990,6 +2060,8 @@
       let cmp = 0;
       switch (s.sortBy) {
         case 'signal': cmp = sigB.score - sigA.score; break;
+        case 'buy': cmp = sigB.score - sigA.score; break;   /* highest score first = strongest BUY first */
+        case 'sell': cmp = sigA.score - sigB.score; break;   /* lowest score first = strongest SELL first */
         case 'change': {
           const cA = a.market?.price || 0;
           const cB = b.market?.price || 0;
@@ -2204,6 +2276,8 @@
       </label>
       <select class="tpda-stock-sort" style="background:#1a1e2a;color:#bbb;border:1px solid #333;border-radius:6px;font-size:11px;padding:2px 6px;margin-left:auto;">
         <option value="signal" ${STATE.settings.sortBy === 'signal' ? 'selected' : ''}>Sort: Signal</option>
+        <option value="buy" ${STATE.settings.sortBy === 'buy' ? 'selected' : ''}>Sort: Buy first</option>
+        <option value="sell" ${STATE.settings.sortBy === 'sell' ? 'selected' : ''}>Sort: Sell first</option>
         <option value="change" ${STATE.settings.sortBy === 'change' ? 'selected' : ''}>Sort: Change%</option>
         <option value="price" ${STATE.settings.sortBy === 'price' ? 'selected' : ''}>Sort: Price</option>
         <option value="acronym" ${STATE.settings.sortBy === 'acronym' ? 'selected' : ''}>Sort: Name</option>
@@ -2605,14 +2679,9 @@
       return;
     }
 
-    /* Refresh — force-invalidate all caches including detail timestamps */
+    /* Refresh — full refresh of all data and signals */
     if (e.target.closest('.tpda-stock-refresh')) {
-      STATE.marketFetchedAt = 0;
-      STATE.userFetchedAt = 0;
-      for (const acr of Object.keys(STATE.stockDetails)) {
-        STATE.stockDetails[acr].fetchedAt = 0;
-      }
-      refreshIfStale().then(() => fetchWatchlistDetails());
+      fullRefresh();
       return;
     }
 
@@ -2735,7 +2804,7 @@
 
     /* Fetch watchlist details */
     if (e.target.closest('.tpda-stock-fetch-details')) {
-      fetchWatchlistDetails();
+      fullRefresh();
       return;
     }
 
@@ -2784,14 +2853,7 @@
       return;
     }
 
-    /* Sort dropdown */
-    const sortSel = e.target.closest('.tpda-stock-sort');
-    if (sortSel) {
-      STATE.settings.sortBy = sortSel.value;
-      saveSettings();
-      renderPanel();
-      return;
-    }
+    /* Sort dropdown — handled by 'change' listener in createPanel(), not here */
   }
 
 

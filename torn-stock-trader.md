@@ -112,6 +112,8 @@ If you own a stock and it has a bearish signal (SELL/LEAN SELL/STRONG SELL), a s
 | Sort Option | Sorts By |
 |---|---|
 | **Signal** | Signal score (strongest BUY signals first) |
+| **Buy first** | Stocks with strongest BUY signals at the top |
+| **Sell first** | Stocks with strongest SELL/AVOID signals at the top |
 | **Change%** | Daily price change percentage (biggest gainers first) |
 | **Price** | Share price (highest first) |
 | **Name** | Ticker alphabetically (A to Z) |
@@ -551,6 +553,12 @@ Normal usage: ~2-3 calls per minute. Full Refresh: ~17 calls over ~6 seconds. We
 ---
 
 ## Changelog
+
+### v1.9.1
+
+- **Fix: Sort dropdown now works.** Previously, the click handler intercepted the dropdown before the user could select a new option, causing immediate re-render. Fixed by removing the conflicting click handler; the change listener handles sorting correctly.
+- **Fix: Big Refresh button now fully works.** Replaced the fragile chained refresh (`refreshIfStale().then(fetchWatchlistDetails)`) with a dedicated `fullRefresh()` function that runs all steps in one clear sequence: fetches market data + user holdings in parallel, then fetches detail data for every watchlist stock with progress bar, then recomputes all signals.
+- **New sort options: "Buy first" and "Sell first."** Sort the stock list to show strongest buy signals at the top (Buy first) or strongest sell/avoid signals at the top (Sell first).
 
 ### v1.9.0
 
