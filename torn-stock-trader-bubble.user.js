@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dark Tools - Stock Trader
 // @namespace    alex.torn.pda.stocktrader.bubble
-// @version      1.8.0
+// @version      1.9.0
 // @description  Stock market analyzer — fetches stock prices, tracks history, calculates moving averages, and generates buy/sell signals based on trend analysis.
 // @author       Alex + Devin
 // @match        https://www.torn.com/*
@@ -2231,11 +2231,13 @@
         pnlNote = `<div style="font-size:10px;color:${pnl >= 0 ? '#4caf50' : '#f44336'};margin-top:1px;">P&L: ${formatMoney(pnl)} (${formatPct(pnlPct)})</div>`;
       }
 
+      const detailAge = detail?.fetchedAt ? ageText(detail.fetchedAt) : '';
+
       html += `<div class="tpda-stock-row${isFresh ? ' tpda-fresh' : ''}" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;">
             ${stockLogo(stock.id, 22, stock.acronym)}
-            <span style="font-weight:700;color:${isWatchlisted ? '#ffd740' : '#fff'};">${escapeHtml(stock.acronym)}</span>
+            <a class="tpda-stock-link" href="https://www.torn.com/page.php?sid=stocks" style="font-weight:700;color:${isWatchlisted ? '#ffd740' : '#fff'};text-decoration:none;">${escapeHtml(stock.acronym)}</a>
             ${holding ? '<span style="font-size:10px;color:#4caf50;">\u25CF owned</span>' : ''}
             <span style="font-size:11px;color:#888;">${escapeHtml(stock.name || '')}</span>
           </div>
@@ -2244,14 +2246,17 @@
             ${dayPct != null ? `<span style="font-size:11px;color:${getChangeColor(dayPct)};">${formatPct(dayPct)}</span>` : ''}
             ${history.length > 2 ? sparkline(history.slice(-30), 60, 18) : ''}
           </div>
+          ${detailAge ? `<div style="font-size:9px;color:#555;margin-top:1px;">${detailAge}</div>` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div style="display:flex;align-items:center;gap:4px;">
           <div style="text-align:right;">
             <span class="tpda-stock-badge" style="background:${getSignalColor(label)}22;color:${getSignalColor(label)};">
               ${getSignalIcon(label)} ${escapeHtml(label)}
             </span>
             ${pnlNote}
           </div>
+          <span class="tpda-stock-refresh-one" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}" title="Refresh this stock"
+            style="cursor:pointer;font-size:13px;color:#555;padding:2px;border-radius:50%;transition:color .15s;">\u21BB</span>
           <span class="tpda-stock-info-btn" data-stock="${escapeHtml(stock.acronym)}" title="Signal details"
             style="cursor:pointer;font-size:14px;color:#555;padding:2px 4px;">\u24D8</span>
         </div>
@@ -2456,17 +2461,19 @@
         totalPnl += pnl;
       }
 
-      html += `<div class="tpda-stock-card" style="cursor:pointer;" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
+      html += `<div class="tpda-stock-card" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="display:flex;align-items:center;gap:6px;">
             ${stockLogo(stock.id, 22, stock.acronym)}
-            <span style="font-weight:700;">${escapeHtml(stock.acronym)}</span>
+            <a class="tpda-stock-link" href="https://www.torn.com/page.php?sid=stocks" style="font-weight:700;color:#fff;text-decoration:none;">${escapeHtml(stock.acronym)}</a>
             <span style="font-size:11px;color:#888;">${escapeHtml(stock.name || '')}</span>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;">
+          <div style="display:flex;align-items:center;gap:4px;">
             <span class="tpda-stock-badge" style="background:${getSignalColor(sig.signal)}22;color:${getSignalColor(sig.signal)};">
               ${getSignalIcon(sig.signal)} ${escapeHtml(sig.signal)}
             </span>
+            <span class="tpda-stock-refresh-one" data-stock="${escapeHtml(stock.acronym)}" data-stockid="${stock.id}" title="Refresh this stock"
+              style="cursor:pointer;font-size:13px;color:#555;padding:2px;">\u21BB</span>
             <span class="tpda-stock-info-btn" data-stock="${escapeHtml(stock.acronym)}" title="Signal details"
               style="cursor:pointer;font-size:14px;color:#555;padding:2px 4px;">\u24D8</span>
           </div>
@@ -2598,10 +2605,13 @@
       return;
     }
 
-    /* Refresh */
+    /* Refresh — force-invalidate all caches including detail timestamps */
     if (e.target.closest('.tpda-stock-refresh')) {
       STATE.marketFetchedAt = 0;
       STATE.userFetchedAt = 0;
+      for (const acr of Object.keys(STATE.stockDetails)) {
+        STATE.stockDetails[acr].fetchedAt = 0;
+      }
       refreshIfStale().then(() => fetchWatchlistDetails());
       return;
     }
@@ -2645,10 +2655,31 @@
       return;
     }
 
-    /* Stock row click → open in Torn stock market */
-    const stockRow = e.target.closest('[data-stock]');
-    if (stockRow) {
-      window.location.href = 'https://www.torn.com/page.php?sid=stocks';
+    /* Stock ticker link — let it navigate naturally (it's an <a> tag) */
+    const stockLink = e.target.closest('.tpda-stock-link');
+    if (stockLink) {
+      return; /* browser follows the href */
+    }
+
+    /* Per-stock refresh button */
+    const refreshOne = e.target.closest('.tpda-stock-refresh-one');
+    if (refreshOne) {
+      const acr = refreshOne.dataset.stock;
+      const sid = parseInt(refreshOne.dataset.stockid, 10);
+      if (acr && sid) {
+        addLog('Refreshing ' + acr + '...');
+        fetchStockDetail(sid).then(d => {
+          if (d) {
+            STATE.stockDetails[acr] = { ...d, fetchedAt: Date.now() };
+            STATE.freshlyLoaded[acr] = Date.now();
+            saveDetailCache();
+            computeAllSignals();
+            renderPanel();
+            setTimeout(() => { delete STATE.freshlyLoaded[acr]; renderPanel(); }, 3000);
+            addLog('Refreshed ' + acr);
+          }
+        });
+      }
       return;
     }
 

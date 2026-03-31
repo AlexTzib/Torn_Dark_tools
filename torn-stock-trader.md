@@ -23,7 +23,8 @@ A stock market analyzer for Torn City. Fetches real-time stock data via the Torn
 13. [Data & Caching](#data--caching)
 14. [API Usage & Rate Limits](#api-usage--rate-limits)
 15. [Compliance](#compliance)
-16. [Disclaimer](#disclaimer)
+16. [Changelog](#changelog)
+17. [Disclaimer](#disclaimer)
 
 ---
 
@@ -32,8 +33,9 @@ A stock market analyzer for Torn City. Fetches real-time stock data via the Torn
 1. Tap the gold **$** bubble on any Torn page
 2. Enter your API key if prompted (automatic in Torn PDA)
 3. The Overview tab loads all Torn stocks with prices and signals
-4. Tap any stock row to see the full detail breakdown
-5. Check the Holdings tab to track your owned stocks and P&L
+4. Tap the **⊛** info button on any stock to see the full detail breakdown
+5. Tap the stock **ticker name** (e.g. "TCT") to open the Torn stock market page
+6. Check the Holdings tab to track your owned stocks and P&L
 
 ---
 
@@ -63,20 +65,38 @@ Below the tabs is a **status bar** showing: how many stocks are loaded, how many
 This is the main screen. Each row shows one Torn stock:
 
 ```
- TCT   Torn City Investments           $3.45   +1.23%   [mini chart]   [LEAN BUY]
+ [logo] TCT  ● owned  Torn City Investments     $3.45  +1.23%  [sparkline]   [LEAN BUY] ↻ ⓘ
+                                                                               2 min ago
 ```
 
 ### What Each Element Means
 
 | Element | Description |
 |---|---|
-| **Ticker** (e.g. TCT) | The stock's abbreviation. Shown in yellow if it's on your watchlist. |
-| **"owned" dot** | A small green dot appears next to the ticker if you own shares of this stock. |
+| **Logo** | Stock company logo from the YATA community CDN. Falls back to initials if unavailable. |
+| **Ticker** (e.g. TCT) | The stock's abbreviation. Shown in **yellow** if it's on your watchlist. **Click the ticker to open the Torn stock market page.** |
+| **"● owned" dot** | A small green dot appears next to the ticker if you own shares of this stock. |
 | **Full name** | The stock's full company name (in grey). |
 | **Price** | Current share price from the Torn API (updated every 5 minutes). |
 | **Daily change %** | How much the price has moved in the last 24 hours. Green = up, red = down. |
 | **Mini sparkline** | A tiny line chart showing the recent price history at a glance. Green line = price went up overall, red line = price went down. |
-| **Signal badge** | The computed recommendation. See [Signal Levels Explained](#signal-levels-explained) below. |
+| **Signal badge** | The computed recommendation. See [Signal Levels Explained](#signal-levels-explained) below. For stocks you don't own, bearish signals show as AVOID instead of SELL (see [Context-Aware Signals](#context-aware-signals)). |
+| **↻ Refresh button** | Small circular refresh icon — fetches fresh detail data for this individual stock and recomputes its signal. |
+| **ⓘ Info button** | Opens the full Detail View for this stock (charts, indicators, analysis). |
+| **Last updated** | Tiny timestamp below the price showing how long ago this stock's detail data was fetched. |
+
+### Progress Bar
+
+When you tap **Refresh**, a progress bar appears at the top showing:
+- Which stock is currently being fetched (e.g. "Refreshing 3/15 — TCT...")
+- A percentage counter on the right
+- A blue bar filling up as each stock completes
+
+Each stock row **glows blue** briefly as its data arrives, so you can see the update happening in real time.
+
+### P&L Note (Owned Stocks with Bearish Signals)
+
+If you own a stock and it has a bearish signal (SELL/LEAN SELL/STRONG SELL), a small P&L line appears below the signal badge showing your unrealized profit or loss. This helps you decide whether selling makes sense.
 
 ### Filter Toggles (above the list)
 
@@ -99,22 +119,25 @@ This is the main screen. Each row shows one Torn stock:
 
 ### Interacting
 
-- **Tap any stock row** to open its Detail View
-- **Tap Refresh** to force-reload all stock data from the API
+- **Tap a stock's ticker name** (e.g. "TCT") to navigate to the Torn stock market page
+- **Tap ⓘ** to open the stock's Detail View (charts, indicators, analysis)
+- **Tap ↻** on any stock row to refresh just that one stock's data and signal
+- **Tap Refresh** (status bar) to force-reload ALL stock data and signals from the API
 
 ---
 
 ## Detail View — Stock Breakdown
 
-When you tap a stock from the Overview or Holdings tab, you see its full breakdown. Here's every section explained:
+When you tap the ⓘ button on a stock from the Overview or Holdings tab, you see its full breakdown. Here's every section explained:
 
 ### Header Bar
 
 ```
-[Back]   TCT   Torn City Investments   [Watch / Watching]
+[Back]   [logo] TCT   Torn City Investments   [Watch / Watching]
 ```
 
-- **Back** — returns to the Overview tab
+- **Back** — returns to the previous tab (Overview or Holdings)
+- **Logo** — stock company logo (28px)
 - **Watch / Watching** — toggle this stock on/off your watchlist. Yellow = watching.
 
 ### Price & Signal Card
@@ -159,6 +182,10 @@ A bullet-point list showing **exactly why** the algorithm gave this signal. Each
 - "Near day low (support zone)" — the current price is near the bottom of today's trading range, suggesting it may bounce up, adding +1
 
 This section is the most important for understanding **why** a signal was given. Read through each reason to decide if you agree with the assessment.
+
+**Ownership context notes:** At the bottom of the analysis:
+- If you **own** the stock and it has a bearish signal with negative P&L: "You own this stock at -X% P&L. Selling now locks in losses."
+- If you **don't own** the stock and it has a bearish signal: "You don't own this stock — signal means 'avoid buying.'"
 
 ### Your Position (only if you own this stock)
 
@@ -209,12 +236,14 @@ Raw values of the computed indicators:
 ### Per-Stock Cards
 
 Each stock you own gets a card showing:
-- Ticker, name, and signal badge
+- Logo, ticker (click to go to Torn stock market), name, and signal badge
+- ↻ refresh button and ⓘ info button
 - Number of shares, current price, and total value
 - P&L in dollars and percentage
 - Bonus progress (if it's a benefit stock)
+- Warning text if you're at a loss with a bearish signal
 
-Tap any card to open its Detail View.
+Tap ⓘ on any card to open its Detail View. Tap the ticker name to go to the Torn stock market.
 
 ---
 
@@ -284,7 +313,9 @@ The signal is **advisory only** — it tells you what the data suggests, not wha
 
 ## Signal Levels Explained
 
-There are 7 signal levels, from strongest buy to strongest sell:
+There are 7 base signal levels, from strongest buy to strongest sell. Additionally, bearish signals show as AVOID variants for stocks you don't own (see [Context-Aware Signals](#context-aware-signals)).
+
+### Base Signals (for owned stocks)
 
 | Signal | Score | Color | Icon | What It Means |
 |---|---|---|---|---|
@@ -296,13 +327,25 @@ There are 7 signal levels, from strongest buy to strongest sell:
 | **SELL** | -2 to -3.9 | Red | Down arrow | Clear bearish signals. The stock is trending down with supporting technical indicators. The data suggests this is a good time to exit or avoid buying. |
 | **STRONG SELL** | -4 or lower | Bright red | Double down arrow | Multiple strong bearish indicators align. The stock shows strong downward momentum, may be overbought, and/or is significantly overvalued. This is the strongest sell recommendation. |
 
+### Context-Aware Signals (AVOID — for stocks you DON'T own)
+
+When a stock has a bearish signal but you **don't own it**, the signal label changes from SELL to AVOID. This is because "sell" doesn't make sense if you have nothing to sell — the advice is to avoid buying it.
+
+| Original Signal | Shown As (Not Owned) | Color | Icon | What It Means |
+|---|---|---|---|---|
+| **STRONG SELL** | **STRONG AVOID** | Bright red | Double down arrow | Strong bearish signals — stay away from this stock |
+| **SELL** | **AVOID** | Red | Down arrow | Clear bearish signals — not a good time to buy this stock |
+| **LEAN SELL** | **LEAN AVOID** | Red | Down arrow | Slightly bearish — the data mildly suggests not buying right now |
+
+For stocks you **do own**, bearish signals remain as SELL/LEAN SELL/STRONG SELL, and a P&L note appears to help you evaluate whether to hold or exit.
+
 ### In Simple Terms
 
 - **STRONG BUY / BUY** — "The data says this stock looks good right now"
 - **LEAN BUY** — "The data slightly favors buying, but it's not a strong signal"
 - **HOLD** — "Nothing interesting is happening, wait and see"
-- **LEAN SELL** — "The data slightly favors selling, but it's not a strong signal"
-- **SELL / STRONG SELL** — "The data says this stock doesn't look good right now"
+- **LEAN SELL / LEAN AVOID** — "The data slightly favors selling/avoiding, but it's not a strong signal"
+- **SELL / AVOID / STRONG SELL / STRONG AVOID** — "The data says this stock doesn't look good right now"
 
 ---
 
@@ -473,7 +516,8 @@ A higher ROI means the benefit is a better deal relative to the stock's current 
 
 - Data refreshes automatically every 5 minutes while the panel is open
 - Closing the panel stops all polling (saves API calls)
-- The "Refresh" button forces an immediate reload regardless of cache
+- The **Refresh** button forces an immediate reload of ALL data, including detail chart data for every watchlist stock — all signals are recomputed fresh
+- The **↻** per-stock button refreshes just that one stock's detail data and recomputes its signal
 - Local price snapshots are taken once per hour and kept for 7 days
 
 ---
@@ -484,10 +528,11 @@ A higher ROI means the benefit is a better deal relative to the stock's current 
 |---|---|---|
 | Load all stocks | 1 | Every 5 min (auto-poll when panel open) |
 | Load user holdings | 1 | Every 5 min |
-| Fetch stock detail | 1 per stock | When you tap a stock, or manual "Fetch Watchlist Details" |
-| Full watchlist scan | ~15 calls | Manual only (350ms gap between calls) |
+| Fetch single stock detail | 1 | When you tap ↻ on a stock row, or ⓘ if data is stale |
+| Full Refresh | 1 + 1 + ~15 | Manual — reloads market data, user holdings, and all watchlist details (350ms gap between calls) |
+| Full watchlist scan | ~15 calls | Manual "Fetch Watchlist Details" button (350ms gap between calls) |
 
-Normal usage: ~2-3 calls per minute. Full watchlist scan: ~17 calls over ~6 seconds. Well under Torn's 100 calls/min limit.
+Normal usage: ~2-3 calls per minute. Full Refresh: ~17 calls over ~6 seconds. Well under Torn's 100 calls/min limit.
 
 ---
 
@@ -502,6 +547,54 @@ Normal usage: ~2-3 calls per minute. Full watchlist scan: ~17 calls over ~6 seco
 | API rate limits respected | ~3 calls/min normal, ~17 on full refresh |
 | No request modification | Compliant — read-only interception |
 | Read-only display | Compliant — advisory signals only |
+
+---
+
+## Changelog
+
+### v1.9.0
+
+- **Fix: Refresh now fully updates all signals.** Previously, clicking Refresh only reloaded stock prices but kept stale detail data (up to 15 min old). Now Refresh invalidates all detail cache timestamps, forcing a complete re-fetch of chart/performance data for every watchlist stock. All signals are recomputed with fresh data.
+- **Per-stock refresh button (↻).** Each stock row now has a small circular ↻ icon. Tap it to refresh just that one stock's detail data and recompute its signal — without refreshing everything.
+- **Last-updated timestamp.** Each stock row shows a small "X min ago" / "X sec ago" text below the price, showing when its detail data was last fetched.
+- **Stock market link: ticker name only.** Clicking a stock row no longer navigates away. Instead, only clicking the **ticker name** (e.g. "TCT") opens the Torn stock market page. The ⓘ button opens the detail view.
+- **Documentation overhaul.** Full rewrite of this guide covering all features from v1.3–v1.9 including AVOID signals, logos, progress bar, per-stock refresh, and all UI changes.
+
+### v1.8.0
+
+- Progress bar with percentage during full refresh scan
+- Each stock row glows blue as its data finishes loading (fades after 3 seconds)
+- Refresh now auto-fetches detail data for all watchlist stocks (not just overview prices)
+- Refresh button restyled as a proper blue button
+
+### v1.7.0
+
+- Stock row click navigates to Torn stock market page
+- Added ⓘ info button on each row for Detail View access
+
+### v1.6.0
+
+- Watchlist filter defaults to ON (one-time migration)
+- Removing a stock from watchlist immediately hides it if Watchlist filter is on
+- Back button preserves scroll position
+
+### v1.5.0
+
+- Context-aware signals: SELL → AVOID, LEAN SELL → LEAN AVOID, STRONG SELL → STRONG AVOID for stocks you don't own
+- P&L note on Overview rows for owned stocks with bearish signals
+- Warning text on Holdings cards for owned stocks at a loss with bearish signal
+
+### v1.4.0
+
+- Stock company logos from YATA CDN (22px in Overview/Holdings, 28px in Detail View)
+- Fallback to initials if logo unavailable
+
+### v1.3.0
+
+- Hourly momentum weight reduced (±1 → ±0.5) to reduce noise
+- Resistance zone weight increased (-0.5 → -1) for symmetry with support (+1)
+- SMA crossover labels changed to "bullish crossover" / "bearish crossover"
+- New ROI < 1% penalty (-0.5) for benefit stocks overpriced relative to payout
 
 ---
 
